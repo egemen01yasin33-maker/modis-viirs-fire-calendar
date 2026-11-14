@@ -25,8 +25,9 @@ CACHE_DIRNAME = "_cache"
 DB_FILENAME = "fires.duckdb"
 CHUNK_SIZE = 250_000
 # Map sample size — charts use full-range SQL aggregates instead.
-# Raised so sparse regions (e.g. Turkey in winter) survive Global samples.
-MAX_FILTERED_ROWS = 50_000
+# Keep this modest: Plotly/browser freezes above a few thousand markers.
+# Spatial sampling (not random) preserves sparse regions like Turkey.
+MAX_FILTERED_ROWS = 6_000
 # Tiny fixtures kept in data/ for unit tests — skip in Archive mode inventory
 SKIP_FILENAMES = frozenset({"sample_firms.csv"})
 # Columns needed for harmonization + map (keep the query narrow/fast)
