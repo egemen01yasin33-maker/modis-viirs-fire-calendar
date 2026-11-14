@@ -1,71 +1,88 @@
 # Unified Fire Activity Calendar
 
-NASA Space Apps Challenge 2026 – MODIS ve VIIRS hot spot harmonizasyonu.
+NASA Space Apps Challenge 2026 – MODIS & VIIRS hot spot harmonization.
 
-Uygulama, [NASA FIRMS Area API](https://firms.modaps.eosdis.nasa.gov/api/) üzerinden
-canlı sıcak nokta verisi çeker; **1 km** mesafe ve **±6 saat** zaman penceresinde
-MODIS ↔ VIIRS eşleşmelerini *Matched (High Confidence)* olarak işaretler.
+Dark turquoise / black Streamlit UI. Two data sources:
 
-## Özellikler
+1. **Archive CSV** — drop FIRMS Archive downloads into `data/`; the app streams
+   multi-GB files and keeps only the selected region + date range.
+2. **NRT API** — live FIRMS Area API via `FIRMS_MAP_KEY` in `.env`.
 
-1. **FIRMS_MAP_KEY** — `.env` dosyasından okunur (Git’e eklenmez)
-2. **Bölge** — Türkiye, Akdeniz, Ege, İç Anadolu veya manuel bbox
-3. **Sensörler** — `MODIS_NRT`, `VIIRS_NOAA20_NRT`, `VIIRS_NOAA21_NRT` (çoklu)
-4. **Gün sayısı** — 1–10 slider
-5. **Harmonizasyon** — Matched / MODIS-only / VIIRS-only
-6. **Folium harita** — yeşil / turuncu / mavi
-7. **Yangın aktivitesi takvimi** — günlük veya haftalık Plotly grafik
-8. **İstatistik kartları** — toplam, matched, MODIS-only, VIIRS-only
+Matched (High Confidence) = within **1 km** and **±6 hours**.
 
-## Çalıştırma
+## Features
+
+- Preset regions (Global, Amazon, Australia, California, Mediterranean,
+  Siberia, Indonesia, Turkey sub-regions) + place name + manual bbox
+- Auto sensors: MODIS_NRT + VIIRS NOAA-20/21 (NRT mode)
+- Anomaly days (>2× mean daily activity)
+- Comparison mode (two date ranges, same region)
+- OpenStreetMap Folium map + Plotly activity calendar
+- Controls at the bottom (no left sidebar)
+
+## Run locally
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-cp .env.example .env        # FIRMS_MAP_KEY değerini yazın
+cp .env.example .env        # set FIRMS_MAP_KEY for NRT mode
 streamlit run app.py --server.port 8529
 ```
 
-1. [FIRMS MAP Key](https://firms.modaps.eosdis.nasa.gov/api/key/) alın.
-2. `.env` içine `FIRMS_MAP_KEY=...` yazın.
-3. Bölge/sensör/gün seçip **Veriyi Getir**’e basın.
+### Archive CSVs
 
-## Proje yapısı
+Place NASA FIRMS Archive CSVs in `data/` (gitignored except the sample). Example:
+
+- `archive_modis_terra_aqua.csv`
+- `archive_viirs_noaa20.csv`
+- `archive_viirs_noaa21.csv`
+- `archive_viirs_snpp.csv`
+
+Required columns: `latitude`, `longitude`, `acq_date`, `acq_time`,
+`confidence`, `satellite`.
+
+In Archive mode pick a region and a date window that falls inside your CSV
+coverage, then click **Apply / Refresh**. Worldwide multi-year dumps are not
+loaded into RAM in full.
+
+### NRT API
+
+1. Get a [FIRMS MAP Key](https://firms.modaps.eosdis.nasa.gov/api/key/).
+2. Put `FIRMS_MAP_KEY=...` in `.env`.
+3. Choose region + dates (≤10 days) and click **Fetch Data**.
+
+## Layout
 
 ```
-app.py                 # Streamlit arayüzü
-src/firms_api.py       # FIRMS Area API istemcisi
-src/harmonize.py       # Mesafe/zaman eşleme
-data/sample_firms.csv  # Harmonizasyon birim testleri için örnek
-.env.example           # Anahtar şablonu (.env Git'te yok)
-requirements.txt
+app.py                 # Streamlit UI
+src/firms_api.py       # FIRMS Area API client
+src/harmonize.py       # Distance / time matching
+src/archive_csv.py     # Chunked archive loaders
+src/analytics.py       # Anomalies + comparison
+data/                  # Archive CSVs (large files gitignored)
+tests/
 ```
 
-## API
+## Harmonization rule
 
-```
-https://firms.modaps.eosdis.nasa.gov/api/area/csv/{MAP_KEY}/{SENSOR}/{min_lon},{min_lat},{max_lon},{max_lat}/{days}
-```
+A MODIS and VIIRS point are *Matched* when both hold:
 
-## Harmonizasyon kuralı
+- Haversine distance ≤ 1 km
+- `|acq_datetime_MODIS − acq_datetime_VIIRS|` ≤ 6 hours
 
-Bir MODIS ile bir VIIRS noktası şu koşulların ikisini de sağlarsa *Matched* olur:
+Greedy bipartite match: each MODIS takes the nearest unused VIIRS in its
+time window.
 
-- Haversine mesafe ≤ 1 km
-- `|acq_datetime_MODIS − acq_datetime_VIIRS|` ≤ 6 saat
-
-Eşleme açgözlüdür: her MODIS için zaman penceresindeki en yakın, henüz
-eşleşmemiş VIIRS seçilir.
-
-## Testler
+## Tests
 
 ```bash
 python tests/test_harmonize.py
 python tests/test_firms_api.py
+python tests/test_archive_csv.py
 ```
 
-## Güvenlik notu
+## Security
 
-`FIRMS_MAP_KEY` `.env` dosyasındadır ve `.gitignore` ile hariç tutulur.
-Anahtar loglanmaz, `session_state`’e yazılmaz ve hata mesajlarında gösterilmez.
+`FIRMS_MAP_KEY` lives in `.env` (gitignored). It is not logged, not stored in
+`session_state`, and not echoed in error messages.

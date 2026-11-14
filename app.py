@@ -28,12 +28,13 @@ from src.analytics import (
     summary_sentence,
 )
 from src.archive_csv import (
+    MAX_FILTERED_ROWS,
     ArchiveCsvError,
     data_dir,
-    filter_by_bbox,
-    filter_by_dates,
-    list_csv_files,
-    load_and_merge_csvs,
+    describe_csv_files,
+    list_archive_csv_files,
+    load_filtered_csvs,
+    peek_archive_date_bounds,
     save_uploaded_csvs,
 )
 from src.firms_api import (
@@ -235,27 +236,47 @@ def _parse_date_range(value, today: date) -> tuple[date, date]:
     return today, today
 
 
-@st.cache_data(show_spinner=False)
-def load_archive_harmonized(folder_str: str, mtimes_key: tuple) -> dict:
-    """
-    Load + merge + harmonize all CSVs under data/.
+def _archive_mtimes_key(folder: Path) -> tuple:
+    files = list_archive_csv_files(folder)
+    return tuple((p.name, p.stat().st_mtime_ns) for p in files)
 
-    Cached by folder path and file mtimes so edits reload automatically.
+
+@st.cache_data(show_spinner=False)
+def load_archive_slice(
+    folder_str: str,
+    mtimes_key: tuple,
+    min_lon: float,
+    min_lat: float,
+    max_lon: float,
+    max_lat: float,
+    start_iso: str,
+    end_iso: str,
+) -> dict:
     """
-    folder = Path(folder_str)
-    raw, names = load_and_merge_csvs(folder)
-    harmonized = harmonize_hotspots(raw)
+    Stream archive CSVs, keep rows inside bbox + date window, then harmonize.
+
+    Cached by folder mtimes and the filter key so Apply reuses prior slices.
+    """
+    raw, names, stats = load_filtered_csvs(
+        Path(folder_str),
+        min_lon=min_lon,
+        min_lat=min_lat,
+        max_lon=max_lon,
+        max_lat=max_lat,
+        start=start_iso,
+        end=end_iso,
+    )
+    if raw.empty:
+        harmonized = raw
+    else:
+        harmonized = harmonize_hotspots(raw)
     return {
         "raw_rows": int(len(raw)),
         "files": names,
         "harmonized": harmonized,
+        "stats": stats,
         "mtimes_key": mtimes_key,
     }
-
-
-def _archive_mtimes_key(folder: Path) -> tuple:
-    files = list_csv_files(folder)
-    return tuple((p.name, p.stat().st_mtime_ns) for p in files)
 
 
 def resolve_controls_bbox(
@@ -341,18 +362,44 @@ def render_comparison(primary: pd.DataFrame, comparison: pd.DataFrame) -> None:
         )
 
 
-def render_control_panel(source_mode: str) -> dict:
+def render_control_panel(
+    source_mode: str,
+    archive_date_min: date | None = None,
+    archive_date_max: date | None = None,
+) -> dict:
     """Bottom panel: region + dates (+ NRT-only limits)."""
     st.header("FIRMS Settings")
 
     today = date.today()
     default_start = today - timedelta(days=2)
+    default_end = today
     compare_default_start = today - timedelta(days=9)
     compare_default_end = today - timedelta(days=7)
+    date_max = today
 
-    # Archive data can span years — use a wider default when possible
-    if source_mode == "Archive CSV":
-        default_start = today - timedelta(days=30)
+    # Archive dumps are historical — default into the CSV coverage window
+    if source_mode == "Archive CSV" and archive_date_min and archive_date_max:
+        date_max = archive_date_max
+        # Prefer a mid-August window in the latest year that has August data
+        august_year = archive_date_max.year
+        candidate_end = date(august_year, 8, 15)
+        if candidate_end > archive_date_max or candidate_end < archive_date_min:
+            august_year -= 1
+            candidate_end = date(august_year, 8, 15)
+        if archive_date_min <= candidate_end <= archive_date_max:
+            default_end = candidate_end
+            default_start = max(archive_date_min, date(august_year, 8, 1))
+        else:
+            default_end = archive_date_max
+            default_start = max(
+                archive_date_min, archive_date_max - timedelta(days=14)
+            )
+        compare_default_end = max(
+            archive_date_min, default_start - timedelta(days=1)
+        )
+        compare_default_start = max(
+            archive_date_min, compare_default_end - timedelta(days=14)
+        )
 
     compare_mode = st.toggle(
         "Comparison mode",
@@ -406,27 +453,31 @@ def render_control_panel(source_mode: str) -> dict:
         )
         primary_range = st.date_input(
             "Primary date range",
-            value=(default_start, today),
-            max_value=today,
+            value=(default_start, default_end),
+            min_value=archive_date_min if source_mode == "Archive CSV" else None,
+            max_value=date_max,
             help=help_dates,
             key="primary_dates",
         )
-        start_date, end_date = _parse_date_range(primary_range, today)
+        start_date, end_date = _parse_date_range(primary_range, default_end)
         span = (end_date - start_date).days + 1
         if source_mode == "NRT API":
             st.caption(f"Primary: {span} day(s) · max {MAX_DAY_RANGE}")
         else:
-            st.caption(f"Primary: {span} day(s)")
+            st.caption(f"Primary: {span} day(s) · streamed filter (not full-file load)")
 
         compare_start = compare_end = None
         if compare_mode:
             compare_range = st.date_input(
                 "Comparison date range",
                 value=(compare_default_start, compare_default_end),
-                max_value=today,
+                min_value=archive_date_min if source_mode == "Archive CSV" else None,
+                max_value=date_max,
                 key="compare_dates",
             )
-            compare_start, compare_end = _parse_date_range(compare_range, today)
+            compare_start, compare_end = _parse_date_range(
+                compare_range, compare_default_end
+            )
 
     with col_action:
         st.write("")
@@ -596,53 +647,62 @@ def render_results(
             st.dataframe(show, use_container_width=True, hide_index=True)
 
 
-def _slice_archive(
-    full: pd.DataFrame,
-    min_lon: float,
-    min_lat: float,
-    max_lon: float,
-    max_lat: float,
-    start_date: date,
-    end_date: date,
-) -> pd.DataFrame:
-    """Apply bbox + date filters to a harmonized archive frame."""
-    scoped = filter_by_bbox(full, min_lon, min_lat, max_lon, max_lat)
-    return filter_by_dates(scoped, start_date, end_date)
+def run_archive_pipeline(controls: dict) -> str | None:
+    """
+    Stream-filter archive CSVs by bbox + dates, harmonize, store in session.
 
-
-def run_archive_pipeline(controls: dict, archive_payload: dict) -> None:
-    """Filter cached archive harmonization into session results."""
+    Returns a short banner string for the results area, or None on failure.
+    """
     try:
         region_label, min_lon, min_lat, max_lon, max_lat = resolve_controls_bbox(
             controls
         )
     except FirmsApiError as exc:
         st.error(str(exc))
-        return
+        return None
 
-    full: pd.DataFrame = archive_payload["harmonized"]
-    if full.empty:
-        st.warning("Archive CSVs loaded but produced no valid MODIS/VIIRS rows.")
-        st.session_state.harmonized = None
-        return
+    mtimes = _archive_mtimes_key(DATA_PATH)
+    start_iso = controls["start_date"].isoformat()
+    end_iso = controls["end_date"].isoformat()
 
-    primary = _slice_archive(
-        full,
-        min_lon,
-        min_lat,
-        max_lon,
-        max_lat,
-        controls["start_date"],
-        controls["end_date"],
-    )
+    with st.spinner(
+        "Streaming archive CSVs (bbox + dates) and harmonizing…"
+    ):
+        try:
+            payload = load_archive_slice(
+                str(DATA_PATH),
+                mtimes,
+                min_lon,
+                min_lat,
+                max_lon,
+                max_lat,
+                start_iso,
+                end_iso,
+            )
+        except ArchiveCsvError as exc:
+            st.error(str(exc))
+            return None
+        except Exception as exc:  # noqa: BLE001
+            st.error(f"Failed to load archive CSVs: {exc}")
+            return None
+
+    primary = payload["harmonized"]
+    stats = payload.get("stats") or {}
     if primary.empty:
         st.warning(
             "No archive hot spots in this region / date range. "
-            "Widen the filters or check your CSV dates."
+            "Widen the filters or check your CSV dates "
+            f"(scanned {stats.get('rows_scanned', 0):,} rows)."
         )
         st.session_state.harmonized = None
         st.session_state.comparison = None
-        return
+        return None
+
+    if stats.get("truncated"):
+        st.warning(
+            f"Result capped at {MAX_FILTERED_ROWS:,} rows. "
+            "Narrow the region or date range for a complete slice."
+        )
 
     st.session_state.harmonized = primary
     st.session_state.last_meta = {
@@ -652,7 +712,8 @@ def run_archive_pipeline(controls: dict, archive_payload: dict) -> None:
         "end_date": controls["end_date"],
         "raw_rows": int(len(primary)),
         "source": "Archive CSV",
-        "files": archive_payload.get("files", []),
+        "files": payload.get("files", []),
+        "rows_scanned": int(stats.get("rows_scanned", 0)),
     }
 
     st.session_state.comparison = None
@@ -663,24 +724,40 @@ def run_archive_pipeline(controls: dict, archive_payload: dict) -> None:
         and controls["compare_start"]
         and controls["compare_end"]
     ):
-        secondary = _slice_archive(
-            full,
-            min_lon,
-            min_lat,
-            max_lon,
-            max_lat,
-            controls["compare_start"],
-            controls["compare_end"],
-        )
-        if secondary.empty:
+        with st.spinner("Loading comparison date range from archive…"):
+            try:
+                cmp_payload = load_archive_slice(
+                    str(DATA_PATH),
+                    mtimes,
+                    min_lon,
+                    min_lat,
+                    max_lon,
+                    max_lat,
+                    controls["compare_start"].isoformat(),
+                    controls["compare_end"].isoformat(),
+                )
+            except Exception as exc:  # noqa: BLE001
+                st.warning(f"Comparison load failed: {exc}")
+                cmp_payload = None
+        if cmp_payload is None or cmp_payload["harmonized"].empty:
             st.warning("No archive hot spots in the comparison date range.")
         else:
-            st.session_state.comparison = secondary
+            st.session_state.comparison = cmp_payload["harmonized"]
             st.session_state.comparison_meta = {
                 "start_date": controls["compare_start"],
                 "end_date": controls["compare_end"],
-                "raw_rows": int(len(secondary)),
+                "raw_rows": int(len(cmp_payload["harmonized"])),
             }
+
+    view_stats = summarize_categories(primary)
+    view_daily = daily_hotspot_counts(primary)
+    view_anom = count_anomalies(view_daily)
+    return (
+        f"Loaded {len(primary):,} records from data/ folder "
+        f"(scanned {stats.get('rows_scanned', 0):,}), "
+        f"{view_stats['matched']:,} matched, "
+        f"{view_anom} anomalies."
+    )
 
 
 def run_nrt_pipeline(controls: dict, map_key: str) -> None:
@@ -798,13 +875,14 @@ def main() -> None:
         ),
     )
 
-    archive_payload = None
     archive_banner = None
+    archive_date_min = archive_date_max = None
 
     if source_mode == "Archive CSV":
         st.markdown(
             f"**CSV folder:** `{DATA_PATH}` — drop files below or copy them "
-            f"into this `data/` directory."
+            f"into this `data/` directory. Large archives are streamed and "
+            f"filtered by region + dates (not loaded entirely into memory)."
         )
         uploads = st.file_uploader(
             "Upload FIRMS Archive CSV files",
@@ -812,19 +890,20 @@ def main() -> None:
             accept_multiple_files=True,
             help=(
                 "Required columns: latitude, longitude, acq_date, "
-                "acq_time, confidence, satellite"
+                "acq_time, confidence, satellite. Multi-GB files are better "
+                "copied into data/ outside the uploader."
             ),
         )
         if uploads:
             saved = save_uploaded_csvs(DATA_PATH, uploads)
-            load_archive_harmonized.clear()
+            load_archive_slice.clear()
             st.success(
                 "Saved to data/: " + ", ".join(saved) + ". Reloading…"
             )
             st.rerun()
 
-        csv_files = list_csv_files(DATA_PATH)
-        if not csv_files:
+        inventory = describe_csv_files(DATA_PATH)
+        if not inventory:
             st.warning(
                 "No CSV files in data/ yet. "
                 "Use the uploader above, or put files in the data/ folder."
@@ -835,31 +914,14 @@ def main() -> None:
             )
             return
 
-        try:
-            mtimes = _archive_mtimes_key(DATA_PATH)
-            with st.spinner("Loading and harmonizing archive CSVs…"):
-                archive_payload = load_archive_harmonized(
-                    str(DATA_PATH), mtimes
-                )
-        except ArchiveCsvError as exc:
-            st.error(str(exc))
-            return
-        except Exception as exc:  # noqa: BLE001
-            st.error(f"Failed to load archive CSVs: {exc}")
-            return
-
-        full = archive_payload["harmonized"]
-        stats_all = summarize_categories(full)
-        daily_all = daily_hotspot_counts(full)
-        anomalies_all = count_anomalies(daily_all)
-        archive_banner = (
-            f"Loaded {archive_payload['raw_rows']} records from data/ folder, "
-            f"{stats_all['matched']} matched, "
-            f"{anomalies_all} anomalies."
-        )
-        st.caption(
-            "Files: " + ", ".join(archive_payload["files"])
-        )
+        labels = [f"{row['name']} ({row['size_label']})" for row in inventory]
+        st.caption("Files: " + ", ".join(labels))
+        archive_date_min, archive_date_max = peek_archive_date_bounds(DATA_PATH)
+        if archive_date_min and archive_date_max:
+            st.caption(
+                f"Detected coverage (from file edges): "
+                f"{archive_date_min.isoformat()} → {archive_date_max.isoformat()}"
+            )
     else:
         map_key = get_firms_map_key()
         if not map_key:
@@ -871,45 +933,47 @@ def main() -> None:
 
     results_area = st.container()
     st.divider()
-    controls = render_control_panel(source_mode)
+    controls = render_control_panel(
+        source_mode,
+        archive_date_min=archive_date_min,
+        archive_date_max=archive_date_max,
+    )
 
-    # Archive: auto-apply filters on first load and when Apply is clicked
-    if source_mode == "Archive CSV" and archive_payload is not None:
+    # Archive: stream-filter on first load and when Apply is clicked
+    if source_mode == "Archive CSV":
         should_run = (
             controls["fetch_clicked"]
             or st.session_state.harmonized is None
             or (st.session_state.last_meta or {}).get("source") != "Archive CSV"
         )
         if should_run:
-            run_archive_pipeline(controls, archive_payload)
+            archive_banner = run_archive_pipeline(controls)
 
     if source_mode == "NRT API" and controls["fetch_clicked"]:
         run_nrt_pipeline(controls, get_firms_map_key())
 
     if st.session_state.harmonized is not None:
         with results_area:
-            # Prefer the required archive banner wording when in CSV mode
-            banner = None
-            if source_mode == "Archive CSV" and archive_banner:
+            banner = archive_banner
+            if (
+                source_mode == "Archive CSV"
+                and banner is None
+                and st.session_state.last_meta
+            ):
+                meta = st.session_state.last_meta
                 view_stats = summarize_categories(st.session_state.harmonized)
-                view_daily = daily_hotspot_counts(
-                    st.session_state.harmonized,
-                    start=pd.Timestamp(
-                        (st.session_state.last_meta or {}).get("start_date")
-                    )
-                    if (st.session_state.last_meta or {}).get("start_date")
-                    else None,
-                    end=pd.Timestamp(
-                        (st.session_state.last_meta or {}).get("end_date")
-                    )
-                    if (st.session_state.last_meta or {}).get("end_date")
-                    else None,
-                )
+                view_daily = daily_hotspot_counts(st.session_state.harmonized)
                 view_anom = count_anomalies(view_daily)
-                # Banner uses full folder load counts as requested
-                banner = archive_banner
-                # Also show filtered-view summary underneath via metrics
-                _ = (view_stats, view_anom)
+                scanned = meta.get("rows_scanned")
+                scanned_bit = (
+                    f" (scanned {scanned:,})" if scanned else ""
+                )
+                banner = (
+                    f"Loaded {meta.get('raw_rows', 0):,} records from data/ folder"
+                    f"{scanned_bit}, "
+                    f"{view_stats['matched']:,} matched, "
+                    f"{view_anom} anomalies."
+                )
             render_results(controls, source_banner=banner)
 
 

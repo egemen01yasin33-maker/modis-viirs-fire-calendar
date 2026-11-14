@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import shutil
 import sys
+import tempfile
+from datetime import date
 from pathlib import Path
 
 import pandas as pd
@@ -16,26 +19,30 @@ from src.archive_csv import (
     filter_by_bbox,
     filter_by_dates,
     load_and_merge_csvs,
+    load_filtered_csvs,
+    peek_archive_date_bounds,
 )
 from src.harmonize import MATCHED, harmonize_hotspots, summarize_categories
 
 
 def test_load_sample_firms_and_harmonize():
-    folder = ROOT / "data"
-    merged, names = load_and_merge_csvs(folder)
-    assert "sample_firms.csv" in names
-    assert len(merged) >= 1
-    out = harmonize_hotspots(merged)
-    stats = summarize_categories(out)
-    assert stats["total"] == stats["matched"] + stats["modis_only"] + stats["viirs_only"]
-    assert stats["matched"] > 0
+    # Isolate sample so multi-GB archive dumps in data/ are not fully loaded
+    sample = ROOT / "data" / "sample_firms.csv"
+    with tempfile.TemporaryDirectory() as td:
+        folder = Path(td)
+        shutil.copy(sample, folder / "sample_firms.csv")
+        merged, names = load_and_merge_csvs(folder)
+        assert "sample_firms.csv" in names
+        assert len(merged) >= 1
+        out = harmonize_hotspots(merged)
+        stats = summarize_categories(out)
+        assert stats["total"] == (
+            stats["matched"] + stats["modis_only"] + stats["viirs_only"]
+        )
+        assert stats["matched"] > 0
 
 
-def test_empty_folder_raises(tmp_path: Path | None = None):
-    empty = ROOT / "data" / "_empty_test_dir_should_not_exist"
-    # use a fresh temp dir via pathlib next to repo
-    import tempfile
-
+def test_empty_folder_raises():
     with tempfile.TemporaryDirectory() as td:
         try:
             load_and_merge_csvs(Path(td))
@@ -61,8 +68,52 @@ def test_filter_helpers():
     assert len(dated) == 1
 
 
+def test_load_filtered_csvs_on_sample():
+    sample = ROOT / "data" / "sample_firms.csv"
+    with tempfile.TemporaryDirectory() as td:
+        folder = Path(td)
+        shutil.copy(sample, folder / "sample_firms.csv")
+        # Wide bbox should keep sample rows
+        df, names, stats = load_filtered_csvs(
+            folder,
+            min_lon=-180,
+            min_lat=-90,
+            max_lon=180,
+            max_lat=90,
+            start=date(2000, 1, 1),
+            end=date(2100, 1, 1),
+        )
+        assert "sample_firms.csv" in names
+        assert len(df) >= 1
+        assert stats["rows_kept"] == len(df)
+
+        empty, _, stats2 = load_filtered_csvs(
+            folder,
+            min_lon=0,
+            min_lat=0,
+            max_lon=1,
+            max_lat=1,
+            start=date(2000, 1, 1),
+            end=date(2000, 1, 2),
+        )
+        assert empty.empty
+        assert stats2["rows_kept"] == 0
+
+
+def test_peek_dates_on_sample():
+    sample = ROOT / "data" / "sample_firms.csv"
+    with tempfile.TemporaryDirectory() as td:
+        folder = Path(td)
+        shutil.copy(sample, folder / "sample_firms.csv")
+        lo, hi = peek_archive_date_bounds(folder)
+        assert lo is not None and hi is not None
+        assert lo <= hi
+
+
 if __name__ == "__main__":
     test_load_sample_firms_and_harmonize()
     test_empty_folder_raises()
     test_filter_helpers()
+    test_load_filtered_csvs_on_sample()
+    test_peek_dates_on_sample()
     print("all archive_csv tests passed")
