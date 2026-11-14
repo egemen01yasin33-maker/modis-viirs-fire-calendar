@@ -25,7 +25,11 @@ CACHE_DIRNAME = "_cache"
 DB_FILENAME = "fires.duckdb"
 CHUNK_SIZE = 250_000
 # Soft cap after bbox+date filter — beyond this, ask the user to narrow scope
-MAX_FILTERED_ROWS = 400_000
+# Hard cap — large Global pulls must not materialize millions of rows
+MAX_FILTERED_ROWS = 80_000
+# Soft guidance used by the UI
+MAX_ARCHIVE_DAY_SPAN = 31
+MAX_GLOBAL_DAY_SPAN = 7
 # Tiny fixtures kept in data/ for unit tests — skip in Archive mode inventory
 SKIP_FILENAMES = frozenset({"sample_firms.csv"})
 # Columns needed for harmonization + map (keep the query narrow/fast)
@@ -440,30 +444,63 @@ def _load_filtered_duckdb(
     path, rebuilt = ensure_hotspots_db(folder)
     con = duckdb.connect(path.as_posix(), read_only=True)
     try:
+        # Stratified sample across the date window so LIMIT never returns
+        # only the first few calendar days of a Global / multi-year query.
         df = con.execute(
             """
+            WITH filtered AS (
+              SELECT
+                latitude, longitude,
+                CAST(acq_date AS VARCHAR) AS acq_date,
+                acq_time, satellite, instrument, confidence, archive_file,
+                ntile(40) OVER (ORDER BY acq_date, longitude, latitude) AS bucket
+              FROM hotspots
+              WHERE acq_date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
+                AND longitude BETWEEN ? AND ?
+                AND latitude BETWEEN ? AND ?
+            ),
+            ranked AS (
+              SELECT
+                *,
+                row_number() OVER (
+                  PARTITION BY bucket
+                  ORDER BY hash(latitude * 1000 + longitude)
+                ) AS rn,
+                count(*) OVER () AS total_n
+              FROM filtered
+            )
             SELECT
-              latitude, longitude,
-              CAST(acq_date AS VARCHAR) AS acq_date,
-              acq_time, satellite, instrument, confidence, archive_file
-            FROM hotspots
-            WHERE acq_date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
-              AND longitude BETWEEN ? AND ?
-              AND latitude BETWEEN ? AND ?
+              latitude, longitude, acq_date, acq_time,
+              satellite, instrument, confidence, archive_file,
+              total_n
+            FROM ranked
+            WHERE rn <= CAST(ceil(? * 1.0 / 40) AS BIGINT)
             LIMIT ?
             """,
-            [start_s, end_s, min_lon, max_lon, min_lat, max_lat, max_rows + 1],
+            [
+                start_s,
+                end_s,
+                min_lon,
+                max_lon,
+                min_lat,
+                max_lat,
+                max_rows,
+                max_rows + 1,
+            ],
         ).df()
     finally:
         con.close()
 
-    truncated = len(df) > max_rows
-    if truncated:
+    total_n = int(df["total_n"].iloc[0]) if not df.empty and "total_n" in df.columns else 0
+    if "total_n" in df.columns:
+        df = df.drop(columns=["total_n"])
+    truncated = total_n > max_rows or len(df) > max_rows
+    if len(df) > max_rows:
         df = df.iloc[:max_rows].copy()
 
     names = [p.name for p in files]
     stats = {
-        "rows_scanned": 0,
+        "rows_scanned": total_n,
         "rows_kept": int(len(df)),
         "truncated": truncated,
         "errors": [],

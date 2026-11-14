@@ -43,23 +43,28 @@ def daily_hotspot_counts(
         .rename(columns={"acq_datetime": "period"})
     )
 
-    # Fill missing days in the window with zeros for a fair mean
-    if start is not None and end is not None:
-        full_idx = pd.date_range(
-            start=pd.Timestamp(start).normalize(),
-            end=pd.Timestamp(end).normalize(),
-            freq="D",
-        )
-        daily = (
-            daily.set_index("period")
-            .reindex(full_idx, fill_value=0)
-            .rename_axis("period")
-            .reset_index()
-        )
+    # Fill small gaps only — never invent multi-year zero series (freezes UI)
+    if start is not None and end is not None and not daily.empty:
+        req_start = pd.Timestamp(start).normalize()
+        req_end = pd.Timestamp(end).normalize()
+        obs_start = pd.Timestamp(daily["period"].min()).normalize()
+        obs_end = pd.Timestamp(daily["period"].max()).normalize()
+        fill_start = max(req_start, obs_start)
+        fill_end = min(req_end, obs_end)
+        span_days = (fill_end - fill_start).days + 1
+        if 1 < span_days <= 120:
+            full_idx = pd.date_range(start=fill_start, end=fill_end, freq="D")
+            daily = (
+                daily.set_index("period")
+                .reindex(full_idx, fill_value=0)
+                .rename_axis("period")
+                .reset_index()
+            )
 
-    mean_total = float(daily["total"].mean()) if len(daily) else 0.0
+    # Mean from days that actually have fires (zeros from gaps don't dilute)
+    positive = daily.loc[daily["total"] > 0, "total"]
+    mean_total = float(positive.mean()) if len(positive) else 0.0
     threshold = mean_total * 2.0
-    # Only flag positive spikes above a meaningful mean
     daily["is_anomaly"] = (daily["total"] > threshold) & (mean_total > 0)
     daily["mean_total"] = mean_total
     daily["threshold"] = threshold
