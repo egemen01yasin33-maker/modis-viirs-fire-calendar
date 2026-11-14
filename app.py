@@ -11,6 +11,7 @@ FIRMS_MAP_KEY is loaded from .env; it is never logged or committed.
 from __future__ import annotations
 
 import os
+from datetime import date, timedelta
 from pathlib import Path
 
 import folium
@@ -22,9 +23,11 @@ from streamlit_folium import st_folium
 
 from src.firms_api import (
     AVAILABLE_SENSORS,
+    MAX_DAY_RANGE,
     PRESET_REGIONS,
     FirmsApiError,
     fetch_firms_area,
+    resolve_place_bbox,
 )
 from src.harmonize import (
     CATEGORY_COLORS,
@@ -44,7 +47,6 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-# Hide the default left sidebar entirely — controls live at the bottom
 st.markdown(
     """
     <style>
@@ -63,13 +65,13 @@ def get_firms_map_key() -> str:
 
 
 def build_map(df: pd.DataFrame) -> folium.Map:
-    """Build a Folium map colored by harmonization category."""
+    """Build a Folium map colored by harmonization category (OpenStreetMap)."""
     center_lat = float(df["latitude"].mean())
     center_lon = float(df["longitude"].mean())
     fmap = folium.Map(
         location=[center_lat, center_lon],
         zoom_start=7,
-        tiles="CartoDB dark_matter",
+        tiles="OpenStreetMap",
     )
 
     for category, color in CATEGORY_COLORS.items():
@@ -133,56 +135,61 @@ def build_activity_chart(ts: pd.DataFrame, freq_label: str) -> go.Figure:
 
 
 def render_control_panel() -> dict:
-    """Bottom control panel: region, sensors, days — MAP_KEY from .env."""
+    """Bottom panel: region + date range. Sensors are always all three NRT."""
     st.header("FIRMS Settings")
 
-    region_mode = st.radio(
-        "Region mode",
-        options=("Preset region", "Manual bbox"),
-        horizontal=True,
-    )
+    today = date.today()
+    default_start = today - timedelta(days=2)
 
-    with st.form("firms_fetch_form", clear_on_submit=False):
-        col_a, col_b, col_c = st.columns((1.2, 1.2, 0.8))
+    col_region, col_dates, col_action = st.columns((1.4, 1.2, 0.7))
 
-        with col_a:
-            if region_mode == "Preset region":
-                region_name = st.selectbox(
-                    "Preset regions",
-                    options=list(PRESET_REGIONS.keys()),
-                    index=0,
-                )
-                min_lon, min_lat, max_lon, max_lat = PRESET_REGIONS[region_name]
-                st.caption(
-                    f"bbox: {min_lon}, {min_lat}, {max_lon}, {max_lat}"
-                )
-            else:
-                region_name = "Manual"
-                r1, r2 = st.columns(2)
-                with r1:
-                    min_lon = st.number_input("min_lon", value=26.0, format="%.4f")
-                    min_lat = st.number_input("min_lat", value=36.0, format="%.4f")
-                with r2:
-                    max_lon = st.number_input("max_lon", value=30.0, format="%.4f")
-                    max_lat = st.number_input("max_lat", value=40.0, format="%.4f")
-
-        with col_b:
-            sensors = st.multiselect(
-                "Sensors",
-                options=list(AVAILABLE_SENSORS),
-                default=list(AVAILABLE_SENSORS),
-                help="Select one or more sensors; results are combined.",
+    with col_region:
+        region_mode = st.radio(
+            "Region",
+            options=("Preset region", "Custom place"),
+            horizontal=True,
+        )
+        if region_mode == "Preset region":
+            region_name = st.selectbox(
+                "Preset regions",
+                options=list(PRESET_REGIONS.keys()),
+                index=0,
             )
-            days = st.slider("Number of days", min_value=1, max_value=10, value=3)
-
-        with col_c:
-            st.write("")
-            st.write("")
-            fetch_clicked = st.form_submit_button(
-                "Fetch Data",
-                type="primary",
-                use_container_width=True,
+            min_lon, min_lat, max_lon, max_lat = PRESET_REGIONS[region_name]
+            place_query = ""
+            st.caption(f"bbox: {min_lon}, {min_lat}, {max_lon}, {max_lat}")
+        else:
+            place_query = st.text_input(
+                "City or region name",
+                placeholder="e.g. Ankara, Istanbul, Izmir",
+                help="Uses a built-in bbox for known places in Turkey.",
             )
+            region_name = (place_query or "").strip() or "Custom"
+            min_lon = min_lat = max_lon = max_lat = None
+
+    with col_dates:
+        date_range = st.date_input(
+            "Date range",
+            value=(default_start, today),
+            max_value=today,
+            help=f"FIRMS NRT supports up to {MAX_DAY_RANGE} days.",
+        )
+        if isinstance(date_range, tuple) and len(date_range) == 2:
+            start_date, end_date = date_range
+        else:
+            start_date = end_date = date_range if isinstance(date_range, date) else today
+
+        span = (end_date - start_date).days + 1
+        st.caption(f"{span} day(s) selected · max {MAX_DAY_RANGE} for NRT")
+
+    with col_action:
+        st.write("")
+        st.write("")
+        fetch_clicked = st.button(
+            "Fetch Data",
+            type="primary",
+            use_container_width=True,
+        )
 
     freq_choice = st.radio(
         "Calendar frequency",
@@ -191,21 +198,35 @@ def render_control_panel() -> dict:
     )
 
     st.caption(
+        "Sensors: MODIS_NRT + VIIRS_NOAA20_NRT + VIIRS_NOAA21_NRT (automatic) · "
         "Source: [NASA FIRMS](https://firms.modaps.eosdis.nasa.gov/) · "
-        "Space Apps 2026 – Hot Spot Harmonization"
+        "Space Apps 2026"
     )
 
     return {
+        "region_mode": region_mode,
         "region_name": region_name,
-        "min_lon": float(min_lon),
-        "min_lat": float(min_lat),
-        "max_lon": float(max_lon),
-        "max_lat": float(max_lat),
-        "sensors": sensors,
-        "days": int(days),
+        "place_query": place_query,
+        "min_lon": min_lon,
+        "min_lat": min_lat,
+        "max_lon": max_lon,
+        "max_lat": max_lat,
+        "start_date": start_date,
+        "end_date": end_date,
         "freq_choice": freq_choice,
         "fetch_clicked": fetch_clicked,
     }
+
+
+def resolve_controls_bbox(controls: dict) -> tuple[str, float, float, float, float]:
+    """Return (region_label, min_lon, min_lat, max_lon, max_lat)."""
+    if controls["region_mode"] == "Preset region":
+        name = controls["region_name"]
+        return name, *PRESET_REGIONS[name]
+
+    bbox = resolve_place_bbox(controls["place_query"])
+    label = (controls["place_query"] or "").strip().title() or "Custom"
+    return label, *bbox
 
 
 def render_results(harmonized: pd.DataFrame, controls: dict) -> None:
@@ -214,34 +235,11 @@ def render_results(harmonized: pd.DataFrame, controls: dict) -> None:
     if meta:
         st.caption(
             f"Region: **{meta.get('region', '—')}** · "
-            f"Sensors: {', '.join(meta.get('sensors', []))} · "
-            f"Last {meta.get('days', '—')} days · "
+            f"{meta.get('start_date', '—')} → {meta.get('end_date', '—')} · "
             f"Raw rows: {meta.get('raw_rows', '—')}"
         )
 
-    min_d = harmonized["acq_datetime"].min().date()
-    max_d = harmonized["acq_datetime"].max().date()
-    date_range = st.date_input(
-        "Date range",
-        value=(min_d, max_d),
-        min_value=min_d,
-        max_value=max_d,
-    )
-    if isinstance(date_range, tuple) and len(date_range) == 2:
-        start_date, end_date = date_range
-    else:
-        start_date, end_date = min_d, max_d
-
-    mask = (
-        (harmonized["acq_datetime"].dt.date >= start_date)
-        & (harmonized["acq_datetime"].dt.date <= end_date)
-    )
-    filtered = harmonized.loc[mask].copy()
-    if filtered.empty:
-        st.warning("No points in the selected date range.")
-        return
-
-    stats = summarize_categories(filtered)
+    stats = summarize_categories(harmonized)
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Total", stats["total"])
@@ -257,20 +255,22 @@ def render_results(harmonized: pd.DataFrame, controls: dict) -> None:
         st.subheader("Harmonized Map")
         st.caption(
             "Turquoise = Matched (High Confidence) · "
-            "Teal = MODIS-only · Cyan = VIIRS-only"
+            "Teal = MODIS-only · Cyan = VIIRS-only · Tiles: OpenStreetMap"
         )
-        fmap = build_map(filtered)
+        fmap = build_map(harmonized)
         st_folium(fmap, width=None, height=480, returned_objects=[])
 
     with right:
         st.subheader("Fire Activity Calendar")
         freq_choice = controls["freq_choice"]
         freq = "D" if freq_choice == "Daily" else "W-MON"
+        start = meta.get("start_date")
+        end = meta.get("end_date")
         ts = activity_timeseries(
-            filtered,
+            harmonized,
             freq=freq,
-            start=pd.Timestamp(start_date),
-            end=pd.Timestamp(end_date),
+            start=pd.Timestamp(start) if start else None,
+            end=pd.Timestamp(end) if end else None,
         )
         if ts.empty:
             st.info("Not enough data for the chart.")
@@ -291,9 +291,9 @@ def render_results(harmonized: pd.DataFrame, controls: dict) -> None:
                 "category",
                 "firms_source",
             )
-            if c in filtered.columns
+            if c in harmonized.columns
         ]
-        display = filtered[show_cols].sort_values("acq_datetime")
+        display = harmonized[show_cols].sort_values("acq_datetime")
         st.dataframe(display, use_container_width=True, hide_index=True)
         csv_bytes = display.to_csv(index=False).encode("utf-8")
         st.download_button(
@@ -339,81 +339,80 @@ def main() -> None:
         st.session_state.harmonized = None
         st.session_state.last_meta = None
 
-    # Results render above the control panel (container order)
     results_area = st.container()
 
     st.divider()
     controls = render_control_panel()
 
     if controls["fetch_clicked"]:
-        if not controls["sensors"]:
-            st.error("Select at least one sensor.")
+        try:
+            region_label, min_lon, min_lat, max_lon, max_lat = resolve_controls_bbox(
+                controls
+            )
+        except FirmsApiError as exc:
+            st.error(str(exc))
             st.session_state.harmonized = None
-        else:
-            with st.spinner("Fetching data from FIRMS…"):
-                try:
-                    raw = fetch_firms_area(
-                        map_key=map_key,
-                        sensors=controls["sensors"],
-                        min_lon=controls["min_lon"],
-                        min_lat=controls["min_lat"],
-                        max_lon=controls["max_lon"],
-                        max_lat=controls["max_lat"],
-                        days=controls["days"],
-                    )
-                except FirmsApiError as exc:
-                    st.error(str(exc))
-                    st.session_state.harmonized = None
-                    return
-                except Exception:  # noqa: BLE001 — avoid leaking the key
-                    st.error(
-                        "An unexpected error occurred. Check your connection "
-                        "and parameters, then try again."
-                    )
-                    st.session_state.harmonized = None
-                    return
+            return
 
-            if raw.empty:
-                st.warning(
-                    "No hot spots found for this region, sensors, and day range. "
-                    "Try a wider bbox or more days."
+        with st.spinner("Fetching data from FIRMS…"):
+            try:
+                raw = fetch_firms_area(
+                    map_key=map_key,
+                    min_lon=min_lon,
+                    min_lat=min_lat,
+                    max_lon=max_lon,
+                    max_lat=max_lat,
+                    start_date=controls["start_date"],
+                    end_date=controls["end_date"],
+                    sensors=AVAILABLE_SENSORS,
                 )
+            except FirmsApiError as exc:
+                st.error(str(exc))
                 st.session_state.harmonized = None
                 return
-
-            missing = validate_firms_columns(raw)
-            if missing:
+            except Exception:  # noqa: BLE001 — avoid leaking the key
                 st.error(
-                    "FIRMS response is missing columns: "
-                    + ", ".join(missing)
+                    "An unexpected error occurred. Check your connection "
+                    "and parameters, then try again."
                 )
                 st.session_state.harmonized = None
                 return
 
-            with st.spinner("Harmonizing hot spots…"):
-                harmonized = harmonize_hotspots(raw)
+        if raw.empty:
+            st.warning(
+                "No hot spots found for this region and date range. "
+                "Try a wider region or different dates."
+            )
+            st.session_state.harmonized = None
+            return
 
-            if harmonized.empty:
-                st.warning(
-                    "No valid MODIS/VIIRS rows could be parsed. "
-                    "Check the satellite / instrument fields in the response."
-                )
-                st.session_state.harmonized = None
-                return
+        missing = validate_firms_columns(raw)
+        if missing:
+            st.error(
+                "FIRMS response is missing columns: " + ", ".join(missing)
+            )
+            st.session_state.harmonized = None
+            return
 
-            st.session_state.harmonized = harmonized
-            st.session_state.last_meta = {
-                "region": controls["region_name"],
-                "bbox": (
-                    controls["min_lon"],
-                    controls["min_lat"],
-                    controls["max_lon"],
-                    controls["max_lat"],
-                ),
-                "sensors": list(controls["sensors"]),
-                "days": controls["days"],
-                "raw_rows": int(len(raw)),
-            }
+        with st.spinner("Harmonizing hot spots…"):
+            harmonized = harmonize_hotspots(raw)
+
+        if harmonized.empty:
+            st.warning(
+                "No valid MODIS/VIIRS rows could be parsed. "
+                "Check the satellite / instrument fields in the response."
+            )
+            st.session_state.harmonized = None
+            return
+
+        st.session_state.harmonized = harmonized
+        st.session_state.last_meta = {
+            "region": region_label,
+            "bbox": (min_lon, min_lat, max_lon, max_lat),
+            "start_date": controls["start_date"],
+            "end_date": controls["end_date"],
+            "raw_rows": int(len(raw)),
+        }
 
     harmonized = st.session_state.harmonized
     if harmonized is not None:
