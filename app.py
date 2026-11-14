@@ -302,10 +302,6 @@ def main() -> None:
 
     harmonized = st.session_state.harmonized
     if harmonized is None:
-        st.info(
-            "Choose a region and sensors, then press **Fetch Data**. "
-            "The API key is loaded from `FIRMS_MAP_KEY` in `.env`."
-        )
         return
 
     meta = st.session_state.last_meta or {}
