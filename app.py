@@ -107,21 +107,15 @@ def build_activity_chart(ts: pd.DataFrame, freq_label: str) -> go.Figure:
 
 
 def render_sidebar() -> dict:
-    """Kenar çubuğu kontrolleri; MAP_KEY yalnızca bellek içi döner."""
+    """Kenar çubuğu kontrolleri; MAP_KEY yalnızca bellek içi döner.
+
+    İstek parametreleri st.form içinde toplanır; böylece widget değişiklikleri
+    API çağrısını tetiklemez ve form_submit_button tıklaması güvenilir olur.
+    """
     with st.sidebar:
         st.header("FIRMS Ayarları")
-        # type=password → ekranda gizlenir; diske yazılmaz
-        map_key = st.text_input(
-            "MAP_KEY",
-            type="password",
-            help=(
-                "NASA FIRMS API anahtarı. "
-                "https://firms.modaps.eosdis.nasa.gov/api/ üzerinden alınır. "
-                "Anahtar kaydedilmez ve loglanmaz."
-            ),
-            placeholder="FIRMS MAP_KEY girin",
-        )
 
+        # Form dışında: anında UI değişimi (Hazır ↔ Manuel)
         st.subheader("Bölge")
         region_mode = st.radio(
             "Bölge seçimi",
@@ -129,42 +123,60 @@ def render_sidebar() -> dict:
             horizontal=True,
         )
 
-        if region_mode == "Hazır bölge":
-            region_name = st.selectbox(
-                "Hazır bölgeler",
-                options=list(PRESET_REGIONS.keys()),
-                index=0,
+        with st.form("firms_fetch_form", clear_on_submit=False):
+            # type=password → ekranda gizlenir; diske yazılmaz
+            map_key = st.text_input(
+                "MAP_KEY",
+                type="password",
+                help=(
+                    "NASA FIRMS API anahtarı. "
+                    "https://firms.modaps.eosdis.nasa.gov/api/ üzerinden alınır. "
+                    "Anahtar kaydedilmez ve loglanmaz."
+                ),
+                placeholder="FIRMS MAP_KEY girin",
             )
-            min_lon, min_lat, max_lon, max_lat = PRESET_REGIONS[region_name]
-            st.caption(
-                f"bbox: {min_lon}, {min_lat}, {max_lon}, {max_lat}"
+
+            if region_mode == "Hazır bölge":
+                region_name = st.selectbox(
+                    "Hazır bölgeler",
+                    options=list(PRESET_REGIONS.keys()),
+                    index=0,
+                )
+                min_lon, min_lat, max_lon, max_lat = PRESET_REGIONS[region_name]
+                st.caption(
+                    f"bbox: {min_lon}, {min_lat}, {max_lon}, {max_lat}"
+                )
+            else:
+                region_name = "Manuel"
+                c1, c2 = st.columns(2)
+                with c1:
+                    min_lon = st.number_input("min_lon", value=26.0, format="%.4f")
+                    min_lat = st.number_input("min_lat", value=36.0, format="%.4f")
+                with c2:
+                    max_lon = st.number_input("max_lon", value=30.0, format="%.4f")
+                    max_lat = st.number_input("max_lat", value=40.0, format="%.4f")
+
+            sensors = st.multiselect(
+                "Sensörler",
+                options=list(AVAILABLE_SENSORS),
+                default=list(AVAILABLE_SENSORS),
+                help="Birden fazla sensör seçilebilir; sonuçlar birleştirilir.",
             )
-        else:
-            region_name = "Manuel"
-            c1, c2 = st.columns(2)
-            with c1:
-                min_lon = st.number_input("min_lon", value=26.0, format="%.4f")
-                min_lat = st.number_input("min_lat", value=36.0, format="%.4f")
-            with c2:
-                max_lon = st.number_input("max_lon", value=30.0, format="%.4f")
-                max_lat = st.number_input("max_lat", value=40.0, format="%.4f")
 
-        sensors = st.multiselect(
-            "Sensörler",
-            options=list(AVAILABLE_SENSORS),
-            default=list(AVAILABLE_SENSORS),
-            help="Birden fazla sensör seçilebilir; sonuçlar birleştirilir.",
-        )
+            days = st.slider("Gün sayısı", min_value=1, max_value=10, value=3)
 
-        days = st.slider("Gün sayısı", min_value=1, max_value=10, value=3)
+            fetch_clicked = st.form_submit_button(
+                "Veriyi Getir",
+                type="primary",
+                use_container_width=True,
+            )
 
+        # Görüntüleme tercihi — veri çekmeden grafiği günceller
         freq_choice = st.radio(
             "Takvim frekansı",
             options=("Günlük", "Haftalık"),
             horizontal=True,
         )
-
-        fetch_clicked = st.button("Veriyi Getir", type="primary", use_container_width=True)
 
         st.divider()
         st.caption(
