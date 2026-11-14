@@ -173,14 +173,18 @@ def build_activity_chart(
     ts: pd.DataFrame,
     freq_label: str,
     daily: pd.DataFrame | None = None,
+    *,
+    focus_start: date | None = None,
+    focus_end: date | None = None,
 ) -> go.Figure:
-    """Stacked category activity with totals, mean, and anomaly markers."""
+    """Detailed stacked activity chart with range slider and focus window."""
     fig = go.Figure()
     work = ts.copy() if not ts.empty else pd.DataFrame(columns=["period"])
 
-    # Prefer daily frame for x-axis continuity when available
     if daily is not None and not daily.empty:
-        base = daily[["period", "total", "is_anomaly", "mean_total", "threshold"]].copy()
+        base = daily[
+            ["period", "total", "is_anomaly", "mean_total", "threshold"]
+        ].copy()
         if not work.empty:
             for col in CATEGORY_COLORS:
                 if col in work.columns:
@@ -190,7 +194,36 @@ def build_activity_chart(
                     base[col] = base[col].fillna(0)
         work = base
 
-    # Stacked bars per category (detail)
+    if work.empty or "period" not in work.columns:
+        fig.update_layout(
+            template="plotly_dark",
+            height=520,
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+        )
+        return fig
+
+    work = work.sort_values("period").reset_index(drop=True)
+    work["period"] = pd.to_datetime(work["period"])
+    if "total" not in work.columns:
+        cat_cols = [c for c in CATEGORY_COLORS if c in work.columns]
+        work["total"] = work[cat_cols].sum(axis=1) if cat_cols else 0
+
+    # Soft area under total for readable trend
+    fig.add_trace(
+        go.Scatter(
+            x=work["period"],
+            y=work["total"],
+            mode="lines",
+            name="Total (area)",
+            line=dict(width=0),
+            fill="tozeroy",
+            fillcolor="rgba(0, 229, 212, 0.12)",
+            hoverinfo="skip",
+            showlegend=False,
+        )
+    )
+
     for col, color in CATEGORY_COLORS.items():
         if col not in work.columns:
             continue
@@ -200,38 +233,43 @@ def build_activity_chart(
                 y=work[col],
                 name=col,
                 marker_color=color,
-                opacity=0.9,
-                hovertemplate="%{x|%Y-%m-%d}<br>" + col + ": %{y:,}<extra></extra>",
+                opacity=0.92,
+                hovertemplate=(
+                    "%{x|%Y-%m-%d}<br>" + col + ": %{y:,}<extra></extra>"
+                ),
             )
         )
 
-    # Total line on top
-    if "total" in work.columns:
+    fig.add_trace(
+        go.Scatter(
+            x=work["period"],
+            y=work["total"],
+            mode="lines+markers",
+            name="Daily total",
+            line=dict(color="#ffffff", width=2.5),
+            marker=dict(size=6, color="#ffffff"),
+            hovertemplate="%{x|%Y-%m-%d}<br>Total: %{y:,}<extra></extra>",
+        )
+    )
+
+    # Rolling mean for detail
+    window = 7 if freq_label == "Daily" else 4
+    if len(work) >= max(3, window // 2):
+        roll = (
+            work.set_index("period")["total"]
+            .rolling(window=min(window, len(work)), min_periods=1)
+            .mean()
+        )
         fig.add_trace(
             go.Scatter(
-                x=work["period"],
-                y=work["total"],
-                mode="lines+markers",
-                name="Total",
-                line=dict(color="#ffffff", width=2.5),
-                marker=dict(size=7, color="#ffffff"),
-                hovertemplate="%{x|%Y-%m-%d}<br>Total: %{y:,}<extra></extra>",
+                x=roll.index,
+                y=roll.values,
+                mode="lines",
+                name=f"{window}-period average",
+                line=dict(color="#7df9ff", width=2, dash="dash"),
+                hovertemplate="%{x|%Y-%m-%d}<br>Avg: %{y:.1f}<extra></extra>",
             )
         )
-    elif not work.empty:
-        cat_cols = [c for c in CATEGORY_COLORS if c in work.columns]
-        if cat_cols:
-            totals = work[cat_cols].sum(axis=1)
-            fig.add_trace(
-                go.Scatter(
-                    x=work["period"],
-                    y=totals,
-                    mode="lines+markers",
-                    name="Total",
-                    line=dict(color="#ffffff", width=2.5),
-                    marker=dict(size=7),
-                )
-            )
 
     if daily is not None and not daily.empty:
         if "mean_total" in daily.columns and len(daily):
@@ -239,7 +277,7 @@ def build_activity_chart(
             fig.add_hline(
                 y=mean_v,
                 line_dash="dash",
-                line_color="rgba(125, 249, 255, 0.7)",
+                line_color="rgba(125, 249, 255, 0.55)",
                 annotation_text=f"Mean {mean_v:.0f}",
                 annotation_position="top left",
             )
@@ -247,17 +285,19 @@ def build_activity_chart(
         if not anomalies.empty:
             fig.add_trace(
                 go.Scatter(
-                    x=anomalies["period"],
+                    x=pd.to_datetime(anomalies["period"]),
                     y=anomalies["total"],
                     mode="markers",
                     name="Busy day",
                     marker=dict(
                         color=ANOMALY_COLOR,
-                        size=16,
+                        size=15,
                         symbol="diamond",
                         line=dict(width=1.5, color="#ffffff"),
                     ),
-                    hovertemplate="%{x|%Y-%m-%d}<br>Busy day: %{y:,}<extra></extra>",
+                    hovertemplate=(
+                        "%{x|%Y-%m-%d}<br>Busy day: %{y:,}<extra></extra>"
+                    ),
                 )
             )
             if "threshold" in daily.columns and len(daily):
@@ -270,6 +310,29 @@ def build_activity_chart(
                     annotation_position="top right",
                 )
 
+    # Highlight selected focus window on the chart
+    shapes = []
+    if focus_start and focus_end:
+        shapes.append(
+            dict(
+                type="rect",
+                xref="x",
+                yref="paper",
+                x0=pd.Timestamp(focus_start),
+                x1=pd.Timestamp(focus_end) + pd.Timedelta(days=1),
+                y0=0,
+                y1=1,
+                fillcolor="rgba(0, 229, 212, 0.08)",
+                line=dict(width=0),
+                layer="below",
+            )
+        )
+
+    x_min = work["period"].min()
+    x_max = work["period"].max()
+    range_start = pd.Timestamp(focus_start) if focus_start else x_min
+    range_end = pd.Timestamp(focus_end) if focus_end else x_max
+
     fig.update_layout(
         title=dict(
             text=f"Fire activity · {freq_label}",
@@ -278,23 +341,33 @@ def build_activity_chart(
             font=dict(size=18),
         ),
         xaxis=dict(
-            title="Date",
+            title="Drag the bottom slider or use 7d / 14d / 1m to pick dates",
             showgrid=True,
             gridcolor="rgba(255,255,255,0.08)",
-            rangeslider=dict(visible=True, thickness=0.08),
+            range=[range_start, range_end],
+            rangeslider=dict(
+                visible=True,
+                thickness=0.14,
+                bgcolor="rgba(0, 40, 40, 0.55)",
+                range=[x_min, x_max],
+            ),
             rangeselector=dict(
-                bgcolor="rgba(20,40,40,0.9)",
+                bgcolor="rgba(20,40,40,0.95)",
                 activecolor="#00e5d4",
+                font=dict(color="#ffffff"),
                 buttons=[
+                    dict(count=3, label="3d", step="day", stepmode="backward"),
                     dict(count=7, label="7d", step="day", stepmode="backward"),
                     dict(count=14, label="14d", step="day", stepmode="backward"),
                     dict(count=1, label="1m", step="month", stepmode="backward"),
+                    dict(count=3, label="3m", step="month", stepmode="backward"),
                     dict(step="all", label="All"),
                 ],
             ),
+            type="date",
         ),
         yaxis=dict(
-            title="Hot spots",
+            title="Hot spots per period",
             showgrid=True,
             gridcolor="rgba(255,255,255,0.08)",
             rangemode="tozero",
@@ -302,18 +375,20 @@ def build_activity_chart(
         legend=dict(
             orientation="h",
             yanchor="bottom",
-            y=1.02,
+            y=1.08,
             x=0,
             title_text="",
         ),
         hovermode="x unified",
-        margin=dict(l=50, r=30, t=80, b=40),
-        height=560,
+        margin=dict(l=55, r=30, t=100, b=40),
+        height=640,
         template="plotly_dark",
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
         barmode="stack",
-        bargap=0.15,
+        bargap=0.12,
+        shapes=shapes,
+        uirevision="activity-chart",
     )
     return fig
 
@@ -563,12 +638,6 @@ def render_control_panel(
         else:
             fetch_clicked = True
 
-    freq_choice = st.radio(
-        "Calendar",
-        options=("Daily", "Weekly"),
-        horizontal=True,
-    )
-
     # Map radio labels back to internal region modes used elsewhere
     region_mode_internal = {
         "Preset": "Preset region",
@@ -589,13 +658,33 @@ def render_control_panel(
         "compare_mode": compare_mode,
         "compare_start": compare_start,
         "compare_end": compare_end,
-        "freq_choice": freq_choice,
+        "freq_choice": "Daily",
         "fetch_clicked": fetch_clicked,
     }
 
 
+def _coerce_focus_dates(
+    start: date,
+    end: date,
+    focus: tuple | list | None,
+) -> tuple[date, date]:
+    """Clamp a chart focus window inside [start, end]."""
+    if not focus or len(focus) != 2:
+        return start, end
+    a, b = focus[0], focus[1]
+    if hasattr(a, "date"):
+        a = a.date()
+    if hasattr(b, "date"):
+        b = b.date()
+    a = max(start, min(a, end))
+    b = max(start, min(b, end))
+    if a > b:
+        a, b = b, a
+    return a, b
+
+
 def render_results(controls: dict) -> None:
-    """Summary, anomalies, map, calendar, optional comparison."""
+    """Summary, map on top, detailed activity chart below with date focus."""
     meta = st.session_state.last_meta or {}
     harmonized: pd.DataFrame = st.session_state.harmonized
     comparison: pd.DataFrame | None = st.session_state.get("comparison")
@@ -603,17 +692,59 @@ def render_results(controls: dict) -> None:
     start = meta.get("start_date")
     end = meta.get("end_date")
     bbox = meta.get("bbox")
+    if start is None or end is None:
+        start = controls["start_date"]
+        end = controls["end_date"]
 
-    daily = daily_hotspot_counts(
-        harmonized,
-        start=pd.Timestamp(start) if start else None,
-        end=pd.Timestamp(end) if end else None,
+    data_key = (
+        str(meta.get("region")),
+        str(start),
+        str(end),
+        str(meta.get("bbox")),
     )
-    anomalies = count_anomalies(daily)
-    stats = summarize_categories(harmonized)
+    if st.session_state.get("_focus_data_key") != data_key:
+        st.session_state._focus_data_key = data_key
+        st.session_state.chart_focus = (start, end)
+        # Reset slider widget state for the new loaded period
+        if "chart_focus_slider" in st.session_state:
+            del st.session_state["chart_focus_slider"]
+
+    # Prefer live slider state (available on rerun before the widget runs)
+    raw_focus = st.session_state.get("chart_focus_slider")
+    if raw_focus is None:
+        raw_focus = st.session_state.get("chart_focus", (start, end))
+    focus_start, focus_end = _coerce_focus_dates(start, end, raw_focus)
+    st.session_state.chart_focus = (focus_start, focus_end)
+
+    focus_mask = (
+        (harmonized["acq_datetime"] >= pd.Timestamp(focus_start))
+        & (
+            harmonized["acq_datetime"]
+            < pd.Timestamp(focus_end) + pd.Timedelta(days=1)
+        )
+    )
+    focused = harmonized.loc[focus_mask].copy()
+    if focused.empty:
+        focused = harmonized
+
+    daily_all = daily_hotspot_counts(
+        harmonized,
+        start=pd.Timestamp(start),
+        end=pd.Timestamp(end),
+    )
+    daily_focus = daily_hotspot_counts(
+        focused,
+        start=pd.Timestamp(focus_start),
+        end=pd.Timestamp(focus_end),
+    )
+    anomalies = count_anomalies(daily_focus)
+    stats = summarize_categories(focused)
 
     if meta:
-        st.caption(f"{meta.get('region', '—')}  ·  {start} → {end}")
+        st.caption(
+            f"{meta.get('region', '—')}  ·  loaded {start} → {end}  ·  "
+            f"focus {focus_start} → {focus_end}"
+        )
 
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Total", f"{stats['total']:,}")
@@ -624,10 +755,10 @@ def render_results(controls: dict) -> None:
 
     if comparison is not None and not comparison.empty:
         st.divider()
-        render_comparison(harmonized, comparison)
+        render_comparison(focused, comparison)
 
-    if anomalies and not daily.empty:
-        anomaly_days = daily.loc[daily["is_anomaly"], "period"]
+    if anomalies and not daily_focus.empty:
+        anomaly_days = daily_focus.loc[daily_focus["is_anomaly"], "period"]
         labels = ", ".join(
             pd.Timestamp(d).strftime("%Y-%m-%d") for d in anomaly_days
         )
@@ -635,10 +766,11 @@ def render_results(controls: dict) -> None:
 
     st.divider()
 
+    # —— Map (full width, top) ——
     st.subheader("Map")
     st.caption("Matched · MODIS only · VIIRS only")
-    map_fig = build_map_figure(harmonized, bbox=bbox)
-    map_fig.update_layout(height=560)
+    map_fig = build_map_figure(focused, bbox=bbox)
+    map_fig.update_layout(height=520)
     st.plotly_chart(
         map_fig,
         use_container_width=True,
@@ -646,33 +778,87 @@ def render_results(controls: dict) -> None:
         key="fire_map",
     )
 
+    # —— Activity chart (full width, below map) ——
     st.subheader("Activity")
-    freq_choice = controls["freq_choice"]
+    head_l, head_r = st.columns((2.2, 1.0))
+    with head_l:
+        st.caption(
+            "Pick a date range below — the map and metrics follow it. "
+            "You can also box-select bars on the chart."
+        )
+    with head_r:
+        freq_choice = st.radio(
+            "Detail",
+            options=("Daily", "Weekly"),
+            horizontal=True,
+            index=0 if controls.get("freq_choice", "Daily") == "Daily" else 1,
+            key="chart_freq",
+        )
+
+    span_days = max((end - start).days, 0)
+    if span_days == 0:
+        st.caption(f"Single day: {start}")
+    else:
+        st.slider(
+            "Date range (chart & map)",
+            min_value=start,
+            max_value=end,
+            value=(focus_start, focus_end),
+            format="YYYY-MM-DD",
+            key="chart_focus_slider",
+        )
+
     freq = "D" if freq_choice == "Daily" else "W-MON"
     ts = activity_timeseries(
         harmonized,
         freq=freq,
-        start=pd.Timestamp(start) if start else None,
-        end=pd.Timestamp(end) if end else None,
+        start=pd.Timestamp(start),
+        end=pd.Timestamp(end),
     )
-    if ts.empty and daily.empty:
+    if ts.empty and daily_all.empty:
         st.info("Not enough data for the chart.")
     else:
         fig = build_activity_chart(
             ts if not ts.empty else pd.DataFrame(columns=["period"]),
             freq_choice,
-            daily=daily,
+            daily=daily_all,
+            focus_start=focus_start,
+            focus_end=focus_end,
         )
-        st.plotly_chart(
+        event = st.plotly_chart(
             fig,
             use_container_width=True,
             config={
                 "displayModeBar": True,
                 "displaylogo": False,
-                "modeBarButtonsToRemove": ["lasso2d", "select2d"],
+                "modeBarButtonsToRemove": ["lasso2d"],
             },
             key="fire_activity",
+            on_select="rerun",
+            selection_mode="box",
         )
+        points = None
+        selection = getattr(event, "selection", None)
+        if selection is not None:
+            points = getattr(selection, "points", None)
+        if not points and isinstance(event, dict):
+            points = (event.get("selection") or {}).get("points")
+        if points:
+            xs: list[pd.Timestamp] = []
+            for p in points:
+                raw = p.get("x") if isinstance(p, dict) else getattr(p, "x", None)
+                if raw is None:
+                    continue
+                ts_val = pd.to_datetime(raw, errors="coerce")
+                if pd.notna(ts_val):
+                    xs.append(pd.Timestamp(ts_val))
+            if xs:
+                new_start = max(start, min(xs).date())
+                new_end = min(end, max(xs).date())
+                if (new_start, new_end) != (focus_start, focus_end):
+                    st.session_state.chart_focus = (new_start, new_end)
+                    st.session_state.chart_focus_slider = (new_start, new_end)
+                    st.rerun()
 
     with st.expander("Harmonized table", expanded=False):
         show_cols = [
@@ -688,9 +874,9 @@ def render_results(controls: dict) -> None:
                 "firms_source",
                 "archive_file",
             )
-            if c in harmonized.columns
+            if c in focused.columns
         ]
-        display = harmonized[show_cols].sort_values("acq_datetime")
+        display = focused[show_cols].sort_values("acq_datetime")
         st.dataframe(display, use_container_width=True, hide_index=True)
         st.download_button(
             "Download CSV",
@@ -699,9 +885,9 @@ def render_results(controls: dict) -> None:
             mime="text/csv",
         )
 
-    if not daily.empty:
+    if not daily_focus.empty:
         with st.expander("Daily totals & anomalies", expanded=False):
-            show = daily[
+            show = daily_focus[
                 ["period", "total", "is_anomaly", "mean_total", "threshold"]
             ]
             st.dataframe(show, use_container_width=True, hide_index=True)
