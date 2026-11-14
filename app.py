@@ -354,8 +354,8 @@ def main() -> None:
     with left:
         st.subheader("Harmonized Map")
         st.caption(
-            "Green = Matched (High Confidence) · "
-            "Orange = MODIS-only · Blue = VIIRS-only"
+            "Turquoise = Matched (High Confidence) · "
+            "Teal = MODIS-only · Cyan = VIIRS-only"
         )
         fmap = build_map(filtered)
         st_folium(fmap, width=None, height=480, returned_objects=[])

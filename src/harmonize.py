@@ -30,11 +30,11 @@ MATCHED = "Matched (High Confidence)"
 MODIS_ONLY = "MODIS-only"
 VIIRS_ONLY = "VIIRS-only"
 
-# Harita / grafik renkleri
+# Map / chart colors (turquoise scale on black UI)
 CATEGORY_COLORS = {
-    MATCHED: "#2ecc71",  # yeşil
-    MODIS_ONLY: "#e67e22",  # turuncu
-    VIIRS_ONLY: "#3498db",  # mavi
+    MATCHED: "#00e5d4",  # bright turquoise
+    MODIS_ONLY: "#14919b",  # deep teal
+    VIIRS_ONLY: "#7df9ff",  # light cyan
 }
 
 # MODIS / VIIRS uydu adları (FIRMS'te sık görülen değerler)
