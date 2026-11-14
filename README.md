@@ -48,6 +48,12 @@ Eşleme açgözlüdür: her MODIS için zaman penceresindeki en yakın, henüz e
 
 İsteğe bağlı `instrument` sütunu da okunur.
 
+## Testler
+
+```bash
+python tests/test_harmonize.py
+```
+
 ## Veri kaynağı
 
 [NASA FIRMS](https://firms.modaps.eosdis.nasa.gov/) — Fire Information for Resource Management System.
