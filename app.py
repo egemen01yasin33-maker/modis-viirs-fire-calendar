@@ -174,32 +174,75 @@ def build_activity_chart(
     freq_label: str,
     daily: pd.DataFrame | None = None,
 ) -> go.Figure:
-    """Category lines + optional anomaly markers on daily totals."""
+    """Stacked category activity with totals, mean, and anomaly markers."""
     fig = go.Figure()
+    work = ts.copy() if not ts.empty else pd.DataFrame(columns=["period"])
+
+    # Prefer daily frame for x-axis continuity when available
+    if daily is not None and not daily.empty:
+        base = daily[["period", "total", "is_anomaly", "mean_total", "threshold"]].copy()
+        if not work.empty:
+            for col in CATEGORY_COLORS:
+                if col in work.columns:
+                    base = base.merge(
+                        work[["period", col]], on="period", how="left"
+                    )
+                    base[col] = base[col].fillna(0)
+        work = base
+
+    # Stacked bars per category (detail)
     for col, color in CATEGORY_COLORS.items():
-        if col not in ts.columns:
+        if col not in work.columns:
             continue
         fig.add_trace(
-            go.Scatter(
-                x=ts["period"],
-                y=ts[col],
-                mode="lines+markers",
+            go.Bar(
+                x=work["period"],
+                y=work[col],
                 name=col,
-                line=dict(color=color, width=2.5),
-                marker=dict(size=8),
+                marker_color=color,
+                opacity=0.9,
+                hovertemplate="%{x|%Y-%m-%d}<br>" + col + ": %{y:,}<extra></extra>",
             )
         )
 
-    if daily is not None and not daily.empty:
+    # Total line on top
+    if "total" in work.columns:
         fig.add_trace(
-            go.Bar(
-                x=daily["period"],
-                y=daily["total"],
-                name="Daily total",
-                marker_color="rgba(0, 229, 212, 0.25)",
-                opacity=0.55,
+            go.Scatter(
+                x=work["period"],
+                y=work["total"],
+                mode="lines+markers",
+                name="Total",
+                line=dict(color="#ffffff", width=2.5),
+                marker=dict(size=7, color="#ffffff"),
+                hovertemplate="%{x|%Y-%m-%d}<br>Total: %{y:,}<extra></extra>",
             )
         )
+    elif not work.empty:
+        cat_cols = [c for c in CATEGORY_COLORS if c in work.columns]
+        if cat_cols:
+            totals = work[cat_cols].sum(axis=1)
+            fig.add_trace(
+                go.Scatter(
+                    x=work["period"],
+                    y=totals,
+                    mode="lines+markers",
+                    name="Total",
+                    line=dict(color="#ffffff", width=2.5),
+                    marker=dict(size=7),
+                )
+            )
+
+    if daily is not None and not daily.empty:
+        if "mean_total" in daily.columns and len(daily):
+            mean_v = float(daily["mean_total"].iloc[0])
+            fig.add_hline(
+                y=mean_v,
+                line_dash="dash",
+                line_color="rgba(125, 249, 255, 0.7)",
+                annotation_text=f"Mean {mean_v:.0f}",
+                annotation_position="top left",
+            )
         anomalies = daily[daily["is_anomaly"]]
         if not anomalies.empty:
             fig.add_trace(
@@ -207,13 +250,14 @@ def build_activity_chart(
                     x=anomalies["period"],
                     y=anomalies["total"],
                     mode="markers",
-                    name="Anomaly",
+                    name="Busy day",
                     marker=dict(
                         color=ANOMALY_COLOR,
-                        size=14,
+                        size=16,
                         symbol="diamond",
-                        line=dict(width=1, color="#ffffff"),
+                        line=dict(width=1.5, color="#ffffff"),
                     ),
+                    hovertemplate="%{x|%Y-%m-%d}<br>Busy day: %{y:,}<extra></extra>",
                 )
             )
             if "threshold" in daily.columns and len(daily):
@@ -222,22 +266,54 @@ def build_activity_chart(
                     y=thr,
                     line_dash="dot",
                     line_color=ANOMALY_COLOR,
-                    annotation_text="2× mean",
-                    annotation_position="top left",
+                    annotation_text=f"2× mean ({thr:.0f})",
+                    annotation_position="top right",
                 )
 
     fig.update_layout(
-        title=f"Fire Activity ({freq_label})",
-        xaxis_title="Period",
-        yaxis_title="Hot spot count",
-        legend_title="Category",
+        title=dict(
+            text=f"Fire activity · {freq_label}",
+            x=0,
+            xanchor="left",
+            font=dict(size=18),
+        ),
+        xaxis=dict(
+            title="Date",
+            showgrid=True,
+            gridcolor="rgba(255,255,255,0.08)",
+            rangeslider=dict(visible=True, thickness=0.08),
+            rangeselector=dict(
+                bgcolor="rgba(20,40,40,0.9)",
+                activecolor="#00e5d4",
+                buttons=[
+                    dict(count=7, label="7d", step="day", stepmode="backward"),
+                    dict(count=14, label="14d", step="day", stepmode="backward"),
+                    dict(count=1, label="1m", step="month", stepmode="backward"),
+                    dict(step="all", label="All"),
+                ],
+            ),
+        ),
+        yaxis=dict(
+            title="Hot spots",
+            showgrid=True,
+            gridcolor="rgba(255,255,255,0.08)",
+            rangemode="tozero",
+        ),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            x=0,
+            title_text="",
+        ),
         hovermode="x unified",
-        margin=dict(l=40, r=20, t=50, b=40),
-        height=400,
+        margin=dict(l=50, r=30, t=80, b=40),
+        height=560,
         template="plotly_dark",
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
-        barmode="overlay",
+        barmode="stack",
+        bargap=0.15,
     )
     return fig
 
@@ -559,43 +635,44 @@ def render_results(controls: dict) -> None:
 
     st.divider()
 
-    left, right = st.columns((1.15, 1.0), gap="large")
+    st.subheader("Map")
+    st.caption("Matched · MODIS only · VIIRS only")
+    map_fig = build_map_figure(harmonized, bbox=bbox)
+    map_fig.update_layout(height=560)
+    st.plotly_chart(
+        map_fig,
+        use_container_width=True,
+        config={"displayModeBar": False},
+        key="fire_map",
+    )
 
-    with left:
-        st.subheader("Map")
-        st.caption("Matched · MODIS only · VIIRS only")
-        map_fig = build_map_figure(harmonized, bbox=bbox)
+    st.subheader("Activity")
+    freq_choice = controls["freq_choice"]
+    freq = "D" if freq_choice == "Daily" else "W-MON"
+    ts = activity_timeseries(
+        harmonized,
+        freq=freq,
+        start=pd.Timestamp(start) if start else None,
+        end=pd.Timestamp(end) if end else None,
+    )
+    if ts.empty and daily.empty:
+        st.info("Not enough data for the chart.")
+    else:
+        fig = build_activity_chart(
+            ts if not ts.empty else pd.DataFrame(columns=["period"]),
+            freq_choice,
+            daily=daily,
+        )
         st.plotly_chart(
-            map_fig,
+            fig,
             use_container_width=True,
-            config={"displayModeBar": False},
-            key="fire_map",
+            config={
+                "displayModeBar": True,
+                "displaylogo": False,
+                "modeBarButtonsToRemove": ["lasso2d", "select2d"],
+            },
+            key="fire_activity",
         )
-
-    with right:
-        st.subheader("Activity")
-        freq_choice = controls["freq_choice"]
-        freq = "D" if freq_choice == "Daily" else "W-MON"
-        ts = activity_timeseries(
-            harmonized,
-            freq=freq,
-            start=pd.Timestamp(start) if start else None,
-            end=pd.Timestamp(end) if end else None,
-        )
-        if ts.empty and daily.empty:
-            st.info("Not enough data for the chart.")
-        else:
-            fig = build_activity_chart(
-                ts if not ts.empty else pd.DataFrame(columns=["period"]),
-                freq_choice,
-                daily=daily,
-            )
-            st.plotly_chart(
-                fig,
-                use_container_width=True,
-                config={"displayModeBar": False},
-                key="fire_activity",
-            )
 
     with st.expander("Harmonized table", expanded=False):
         show_cols = [
