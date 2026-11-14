@@ -25,10 +25,8 @@ from src.analytics import (
     compare_summaries,
     count_anomalies,
     daily_hotspot_counts,
-    summary_sentence,
 )
 from src.archive_csv import (
-    MAX_FILTERED_ROWS,
     ArchiveCsvError,
     data_dir,
     describe_csv_files,
@@ -101,12 +99,35 @@ def _map_zoom_for_bbox(
     return 7
 
 
+MAX_MAP_POINTS = 2_500
+
+
+def _sample_for_map(df: pd.DataFrame, limit: int = MAX_MAP_POINTS) -> pd.DataFrame:
+    """Keep the map responsive: prefer Matched points, then sample the rest."""
+    if len(df) <= limit:
+        return df
+    matched = df[df["category"] == MATCHED]
+    others = df[df["category"] != MATCHED]
+    keep_matched = min(len(matched), max(limit // 3, 400))
+    keep_others = limit - keep_matched
+    parts = []
+    if keep_matched and not matched.empty:
+        parts.append(matched.sample(n=keep_matched, random_state=42))
+    if keep_others and not others.empty:
+        n = min(keep_others, len(others))
+        parts.append(others.sample(n=n, random_state=42))
+    if not parts:
+        return df.head(limit)
+    return pd.concat(parts, ignore_index=True)
+
+
 def build_map(
     df: pd.DataFrame,
     bbox: tuple[float, float, float, float] | None = None,
 ) -> folium.Map:
     """Folium map with OpenStreetMap tiles (no API key)."""
-    if df.empty:
+    plot_df = _sample_for_map(df)
+    if plot_df.empty:
         center_lat, center_lon, zoom = 20.0, 0.0, 2
     elif bbox is not None:
         min_lon, min_lat, max_lon, max_lat = bbox
@@ -114,44 +135,39 @@ def build_map(
         center_lon = (min_lon + max_lon) / 2.0
         zoom = _map_zoom_for_bbox(min_lon, min_lat, max_lon, max_lat)
     else:
-        center_lat = float(df["latitude"].mean())
-        center_lon = float(df["longitude"].mean())
+        center_lat = float(plot_df["latitude"].mean())
+        center_lon = float(plot_df["longitude"].mean())
         zoom = 7
 
     fmap = folium.Map(
         location=[center_lat, center_lon],
         zoom_start=zoom,
         tiles="OpenStreetMap",
+        prefer_canvas=True,
+        control_scale=True,
     )
 
     for category, color in CATEGORY_COLORS.items():
-        subset = df[df["category"] == category]
+        subset = plot_df[plot_df["category"] == category]
         if subset.empty:
             continue
-        layer = folium.FeatureGroup(name=f"{category} ({len(subset)})")
-        for _, row in subset.iterrows():
-            popup = (
-                f"<b>{category}</b><br>"
-                f"Sensor: {row.get('sensor', '')}<br>"
-                f"Satellite: {row.get('satellite', '')}<br>"
-                f"Time: {row.get('acq_datetime', '')}<br>"
-                f"Confidence: {row.get('confidence', '')}<br>"
-                f"Lat/Lon: {row['latitude']:.4f}, {row['longitude']:.4f}"
-            )
+        full_n = int((df["category"] == category).sum()) if not df.empty else len(subset)
+        layer = folium.FeatureGroup(name=f"{category} ({full_n})")
+        # Vectorized-ish add via itertuples (faster than iterrows)
+        for row in subset.itertuples(index=False):
             folium.CircleMarker(
-                location=[row["latitude"], row["longitude"]],
-                radius=7 if category == MATCHED else 6,
+                location=[row.latitude, row.longitude],
+                radius=5 if category == MATCHED else 4,
                 color=color,
                 fill=True,
                 fill_color=color,
-                fill_opacity=0.85,
+                fill_opacity=0.8,
                 weight=1,
-                popup=folium.Popup(popup, max_width=280),
-                tooltip=f"{category} · {row.get('sensor', '')}",
+                tooltip=str(category),
             ).add_to(layer)
         layer.add_to(fmap)
 
-    folium.LayerControl(collapsed=False).add_to(fmap)
+    folium.LayerControl(collapsed=True).add_to(fmap)
     return fmap
 
 
@@ -367,8 +383,8 @@ def render_control_panel(
     archive_date_min: date | None = None,
     archive_date_max: date | None = None,
 ) -> dict:
-    """Bottom panel: region + dates (+ NRT-only limits)."""
-    st.header("FIRMS Settings")
+    """Bottom panel: region + dates."""
+    st.header("Settings")
 
     today = date.today()
     default_start = today - timedelta(days=2)
@@ -377,10 +393,8 @@ def render_control_panel(
     compare_default_end = today - timedelta(days=7)
     date_max = today
 
-    # Archive dumps are historical — default into the CSV coverage window
     if source_mode == "Archive CSV" and archive_date_min and archive_date_max:
         date_max = archive_date_max
-        # Prefer a mid-August window in the latest year that has August data
         august_year = archive_date_max.year
         candidate_end = date(august_year, 8, 15)
         if candidate_end > archive_date_max or candidate_end < archive_date_min:
@@ -401,75 +415,61 @@ def render_control_panel(
             archive_date_min, compare_default_end - timedelta(days=14)
         )
 
-    compare_mode = st.toggle(
-        "Comparison mode",
-        value=False,
-        help="Compare two date ranges for the same region.",
-    )
+    compare_mode = st.toggle("Compare two periods", value=False)
 
     col_region, col_dates, col_action = st.columns((1.5, 1.4, 0.7))
 
     with col_region:
         region_mode = st.radio(
             "Region",
-            options=("Preset region", "Custom place", "Manual bbox"),
+            options=("Preset", "Place name", "Custom area"),
             horizontal=True,
         )
         place_query = ""
         min_lon = min_lat = max_lon = max_lat = None
         region_name = "Custom"
 
-        if region_mode == "Preset region":
+        if region_mode == "Preset":
             region_name = st.selectbox(
-                "Preset regions",
+                "Choose a region",
                 options=list(PRESET_REGIONS.keys()),
                 index=list(PRESET_REGIONS.keys()).index("Turkey")
                 if "Turkey" in PRESET_REGIONS
                 else 0,
+                label_visibility="collapsed",
             )
             min_lon, min_lat, max_lon, max_lat = PRESET_REGIONS[region_name]
-            st.caption(f"bbox: {min_lon}, {min_lat}, {max_lon}, {max_lat}")
-        elif region_mode == "Custom place":
+        elif region_mode == "Place name":
             place_query = st.text_input(
-                "City or region name",
-                placeholder="e.g. Ankara, Istanbul, Izmir",
+                "City or region",
+                placeholder="e.g. Ankara, Istanbul, Amazon",
+                label_visibility="collapsed",
             )
             region_name = (place_query or "").strip() or "Custom"
         else:
-            region_name = "Manual bbox"
+            region_name = "Custom area"
             b1, b2 = st.columns(2)
             with b1:
-                min_lon = st.number_input("min_lon", value=-10.0, format="%.4f")
-                min_lat = st.number_input("min_lat", value=30.0, format="%.4f")
+                min_lon = st.number_input("West", value=-10.0, format="%.2f")
+                min_lat = st.number_input("South", value=30.0, format="%.2f")
             with b2:
-                max_lon = st.number_input("max_lon", value=40.0, format="%.4f")
-                max_lat = st.number_input("max_lat", value=45.0, format="%.4f")
+                max_lon = st.number_input("East", value=40.0, format="%.2f")
+                max_lat = st.number_input("North", value=45.0, format="%.2f")
 
     with col_dates:
-        help_dates = (
-            f"FIRMS NRT supports up to {MAX_DAY_RANGE} days per request."
-            if source_mode == "NRT API"
-            else "Filter the loaded archive CSVs by acquisition date."
-        )
         primary_range = st.date_input(
-            "Primary date range",
+            "Dates",
             value=(default_start, default_end),
             min_value=archive_date_min if source_mode == "Archive CSV" else None,
             max_value=date_max,
-            help=help_dates,
             key="primary_dates",
         )
         start_date, end_date = _parse_date_range(primary_range, default_end)
-        span = (end_date - start_date).days + 1
-        if source_mode == "NRT API":
-            st.caption(f"Primary: {span} day(s) · max {MAX_DAY_RANGE}")
-        else:
-            st.caption(f"Primary: {span} day(s) · streamed filter (not full-file load)")
 
         compare_start = compare_end = None
         if compare_mode:
             compare_range = st.date_input(
-                "Comparison date range",
+                "Compare with",
                 value=(compare_default_start, compare_default_end),
                 min_value=archive_date_min if source_mode == "Archive CSV" else None,
                 max_value=date_max,
@@ -482,29 +482,27 @@ def render_control_panel(
     with col_action:
         st.write("")
         st.write("")
-        action_label = (
-            "Apply / Refresh" if source_mode == "Archive CSV" else "Fetch Data"
-        )
         fetch_clicked = st.button(
-            action_label,
+            "Update map",
             type="primary",
             use_container_width=True,
         )
 
     freq_choice = st.radio(
-        "Calendar frequency",
+        "Calendar",
         options=("Daily", "Weekly"),
         horizontal=True,
     )
 
-    st.caption(
-        "Sensors: MODIS_NRT + VIIRS_NOAA20_NRT + VIIRS_NOAA21_NRT (automatic) · "
-        "Map: OpenStreetMap · "
-        "[NASA FIRMS](https://firms.modaps.eosdis.nasa.gov/) · Space Apps 2026"
-    )
+    # Map radio labels back to internal region modes used elsewhere
+    region_mode_internal = {
+        "Preset": "Preset region",
+        "Place name": "Custom place",
+        "Custom area": "Manual bbox",
+    }[region_mode]
 
     return {
-        "region_mode": region_mode,
+        "region_mode": region_mode_internal,
         "region_name": region_name,
         "place_query": place_query,
         "min_lon": min_lon,
@@ -521,11 +519,7 @@ def render_control_panel(
     }
 
 
-def render_results(
-    controls: dict,
-    *,
-    source_banner: str | None = None,
-) -> None:
+def render_results(controls: dict) -> None:
     """Summary, anomalies, map, calendar, optional comparison."""
     meta = st.session_state.last_meta or {}
     harmonized: pd.DataFrame = st.session_state.harmonized
@@ -543,59 +537,39 @@ def render_results(
     anomalies = count_anomalies(daily)
     stats = summarize_categories(harmonized)
 
-    if source_banner:
-        st.info(source_banner)
-    else:
-        st.success(
-            summary_sentence(stats["total"], stats["matched"], anomalies)
-        )
-
     if meta:
-        st.caption(
-            f"Region: **{meta.get('region', '—')}** · "
-            f"{start} → {end} · "
-            f"Source: {meta.get('source', '—')} · "
-            f"Rows: {meta.get('raw_rows', '—')}"
-        )
+        st.caption(f"{meta.get('region', '—')}  ·  {start} → {end}")
 
     c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("Total", stats["total"])
-    c2.metric("Matched", stats["matched"])
-    c3.metric("MODIS-only", stats["modis_only"])
-    c4.metric("VIIRS-only", stats["viirs_only"])
-    c5.metric("Anomalies", anomalies)
+    c1.metric("Total", f"{stats['total']:,}")
+    c2.metric("Matched", f"{stats['matched']:,}")
+    c3.metric("MODIS only", f"{stats['modis_only']:,}")
+    c4.metric("VIIRS only", f"{stats['viirs_only']:,}")
+    c5.metric("Busy days", anomalies)
 
     if comparison is not None and not comparison.empty:
         st.divider()
         render_comparison(harmonized, comparison)
-        cmp_meta = st.session_state.get("comparison_meta") or {}
-        st.caption(
-            f"Comparison window: {cmp_meta.get('start_date', '—')} → "
-            f"{cmp_meta.get('end_date', '—')}"
-        )
 
     if anomalies and not daily.empty:
         anomaly_days = daily.loc[daily["is_anomaly"], "period"]
         labels = ", ".join(
             pd.Timestamp(d).strftime("%Y-%m-%d") for d in anomaly_days
         )
-        st.warning(f"Anomaly days (> 2× mean daily total): {labels}")
+        st.warning(f"Unusually busy days: {labels}")
 
     st.divider()
 
     left, right = st.columns((1.15, 1.0), gap="large")
 
     with left:
-        st.subheader("Harmonized Map")
-        st.caption(
-            "Turquoise = Matched · Teal = MODIS-only · Cyan = VIIRS-only · "
-            "Tiles: OpenStreetMap"
-        )
+        st.subheader("Map")
+        st.caption("Matched · MODIS only · VIIRS only")
         fmap = build_map(harmonized, bbox=bbox)
         st_folium(fmap, width=None, height=480, returned_objects=[])
 
     with right:
-        st.subheader("Fire Activity Calendar")
+        st.subheader("Activity")
         freq_choice = controls["freq_choice"]
         freq = "D" if freq_choice == "Daily" else "W-MON"
         ts = activity_timeseries(
@@ -665,9 +639,7 @@ def run_archive_pipeline(controls: dict) -> str | None:
     start_iso = controls["start_date"].isoformat()
     end_iso = controls["end_date"].isoformat()
 
-    with st.spinner(
-        "Streaming archive CSVs (bbox + dates) and harmonizing…"
-    ):
+    with st.spinner("Updating map…"):
         try:
             payload = load_archive_slice(
                 str(DATA_PATH),
@@ -682,26 +654,21 @@ def run_archive_pipeline(controls: dict) -> str | None:
         except ArchiveCsvError as exc:
             st.error(str(exc))
             return None
-        except Exception as exc:  # noqa: BLE001
-            st.error(f"Failed to load archive CSVs: {exc}")
+        except Exception:  # noqa: BLE001
+            st.error("Could not load fire data for this selection.")
             return None
 
     primary = payload["harmonized"]
     stats = payload.get("stats") or {}
     if primary.empty:
-        st.warning(
-            "No archive hot spots in this region / date range. "
-            "Widen the filters or check your CSV dates "
-            f"(scanned {stats.get('rows_scanned', 0):,} rows)."
-        )
+        st.warning("No fires found for this region and date range.")
         st.session_state.harmonized = None
         st.session_state.comparison = None
         return None
 
     if stats.get("truncated"):
         st.warning(
-            f"Result capped at {MAX_FILTERED_ROWS:,} rows. "
-            "Narrow the region or date range for a complete slice."
+            "Too many points for one view — try a smaller region or shorter dates."
         )
 
     st.session_state.harmonized = primary
@@ -724,7 +691,7 @@ def run_archive_pipeline(controls: dict) -> str | None:
         and controls["compare_start"]
         and controls["compare_end"]
     ):
-        with st.spinner("Loading comparison date range from archive…"):
+        with st.spinner("Loading comparison…"):
             try:
                 cmp_payload = load_archive_slice(
                     str(DATA_PATH),
@@ -736,11 +703,10 @@ def run_archive_pipeline(controls: dict) -> str | None:
                     controls["compare_start"].isoformat(),
                     controls["compare_end"].isoformat(),
                 )
-            except Exception as exc:  # noqa: BLE001
-                st.warning(f"Comparison load failed: {exc}")
+            except Exception:  # noqa: BLE001
                 cmp_payload = None
         if cmp_payload is None or cmp_payload["harmonized"].empty:
-            st.warning("No archive hot spots in the comparison date range.")
+            st.warning("No fires found in the comparison period.")
         else:
             st.session_state.comparison = cmp_payload["harmonized"]
             st.session_state.comparison_meta = {
@@ -749,15 +715,7 @@ def run_archive_pipeline(controls: dict) -> str | None:
                 "raw_rows": int(len(cmp_payload["harmonized"])),
             }
 
-    view_stats = summarize_categories(primary)
-    view_daily = daily_hotspot_counts(primary)
-    view_anom = count_anomalies(view_daily)
-    return (
-        f"Loaded {len(primary):,} records from data/ folder "
-        f"(scanned {stats.get('rows_scanned', 0):,}), "
-        f"{view_stats['matched']:,} matched, "
-        f"{view_anom} anomalies."
-    )
+    return None
 
 
 def run_nrt_pipeline(controls: dict, map_key: str) -> None:
@@ -772,7 +730,7 @@ def run_nrt_pipeline(controls: dict, map_key: str) -> None:
         st.session_state.comparison = None
         return
 
-    with st.spinner("Fetching primary period from FIRMS NRT…"):
+    with st.spinner("Updating map…"):
         try:
             primary = _fetch_and_harmonize(
                 map_key,
@@ -789,16 +747,13 @@ def run_nrt_pipeline(controls: dict, map_key: str) -> None:
             st.session_state.comparison = None
             return
         except Exception:  # noqa: BLE001
-            st.error(
-                "An unexpected error occurred. Check your connection "
-                "and parameters, then try again."
-            )
+            st.error("Could not load fire data. Try again in a moment.")
             st.session_state.harmonized = None
             st.session_state.comparison = None
             return
 
     if primary.empty:
-        st.warning("No hot spots found for this region and primary date range.")
+        st.warning("No fires found for this region and date range.")
         st.session_state.harmonized = None
         st.session_state.comparison = None
         return
@@ -820,7 +775,7 @@ def run_nrt_pipeline(controls: dict, map_key: str) -> None:
         and controls["compare_start"]
         and controls["compare_end"]
     ):
-        with st.spinner("Fetching comparison period from FIRMS NRT…"):
+        with st.spinner("Loading comparison…"):
             try:
                 secondary = _fetch_and_harmonize(
                     map_key,
@@ -831,15 +786,11 @@ def run_nrt_pipeline(controls: dict, map_key: str) -> None:
                     controls["compare_start"],
                     controls["compare_end"],
                 )
-            except FirmsApiError as exc:
-                st.error(f"Comparison fetch failed: {exc}")
-                secondary = pd.DataFrame()
             except Exception:  # noqa: BLE001
-                st.error("Comparison fetch failed unexpectedly.")
                 secondary = pd.DataFrame()
 
         if secondary.empty:
-            st.warning("No hot spots in the comparison date range.")
+            st.warning("No fires found in the comparison period.")
         else:
             st.session_state.comparison = secondary
             st.session_state.comparison_meta = {
@@ -851,13 +802,7 @@ def run_nrt_pipeline(controls: dict, map_key: str) -> None:
 
 def main() -> None:
     st.title("Unified Fire Activity Calendar")
-    st.markdown(
-        """
-        Harmonize MODIS / VIIRS hot spots (**1 km**, **±6 hours**) from
-        **FIRMS Archive CSVs** in `data/` or live **NRT API** pulls.
-        Anomaly detection flags days above **2×** mean activity.
-        """
-    )
+    st.caption("MODIS and VIIRS fire activity on one map.")
 
     if "harmonized" not in st.session_state:
         st.session_state.harmonized = None
@@ -865,70 +810,28 @@ def main() -> None:
         st.session_state.comparison = None
         st.session_state.comparison_meta = None
 
-    source_mode = st.radio(
-        "Data source",
-        options=("Archive CSV", "NRT API"),
-        horizontal=True,
-        help=(
-            "Archive CSV: load every .csv under data/. "
-            "NRT API: live FIRMS Area API (needs FIRMS_MAP_KEY in .env)."
-        ),
-    )
+    inventory = describe_csv_files(DATA_PATH)
+    archive_date_min, archive_date_max = peek_archive_date_bounds(DATA_PATH)
+    # Prefer local archive when present; otherwise live FIRMS (needs MAP_KEY)
+    source_mode = "Archive CSV" if inventory else "NRT API"
 
-    archive_banner = None
-    archive_date_min = archive_date_max = None
-
-    if source_mode == "Archive CSV":
-        st.markdown(
-            f"**CSV folder:** `{DATA_PATH}` — drop files below or copy them "
-            f"into this `data/` directory. Large archives are streamed and "
-            f"filtered by region + dates (not loaded entirely into memory)."
-        )
-        uploads = st.file_uploader(
-            "Upload FIRMS Archive CSV files",
-            type=["csv"],
-            accept_multiple_files=True,
-            help=(
-                "Required columns: latitude, longitude, acq_date, "
-                "acq_time, confidence, satellite. Multi-GB files are better "
-                "copied into data/ outside the uploader."
-            ),
-        )
-        if uploads:
-            saved = save_uploaded_csvs(DATA_PATH, uploads)
-            load_archive_slice.clear()
-            st.success(
-                "Saved to data/: " + ", ".join(saved) + ". Reloading…"
-            )
-            st.rerun()
-
-        inventory = describe_csv_files(DATA_PATH)
-        if not inventory:
-            st.warning(
-                "No CSV files in data/ yet. "
-                "Use the uploader above, or put files in the data/ folder."
-            )
-            st.info(
-                "Required columns: "
-                "`latitude, longitude, acq_date, acq_time, confidence, satellite`."
-            )
-            return
-
-        labels = [f"{row['name']} ({row['size_label']})" for row in inventory]
-        st.caption("Files: " + ", ".join(labels))
-        archive_date_min, archive_date_max = peek_archive_date_bounds(DATA_PATH)
-        if archive_date_min and archive_date_max:
-            st.caption(
-                f"Detected coverage (from file edges): "
-                f"{archive_date_min.isoformat()} → {archive_date_max.isoformat()}"
-            )
-    else:
+    if source_mode == "NRT API":
         map_key = get_firms_map_key()
         if not map_key:
             st.warning(
-                "NRT mode needs `FIRMS_MAP_KEY` in your `.env` file. "
-                "Or switch to Archive CSV and drop files into data/."
+                "No fire archive found and live data needs a FIRMS key in .env."
             )
+            with st.expander("Add archive files"):
+                uploads = st.file_uploader(
+                    "Upload CSV",
+                    type=["csv"],
+                    accept_multiple_files=True,
+                    label_visibility="collapsed",
+                )
+                if uploads:
+                    save_uploaded_csvs(DATA_PATH, uploads)
+                    load_archive_slice.clear()
+                    st.rerun()
             return
 
     results_area = st.container()
@@ -939,7 +842,6 @@ def main() -> None:
         archive_date_max=archive_date_max,
     )
 
-    # Archive: stream-filter on first load and when Apply is clicked
     if source_mode == "Archive CSV":
         should_run = (
             controls["fetch_clicked"]
@@ -947,34 +849,13 @@ def main() -> None:
             or (st.session_state.last_meta or {}).get("source") != "Archive CSV"
         )
         if should_run:
-            archive_banner = run_archive_pipeline(controls)
-
-    if source_mode == "NRT API" and controls["fetch_clicked"]:
+            run_archive_pipeline(controls)
+    elif controls["fetch_clicked"]:
         run_nrt_pipeline(controls, get_firms_map_key())
 
     if st.session_state.harmonized is not None:
         with results_area:
-            banner = archive_banner
-            if (
-                source_mode == "Archive CSV"
-                and banner is None
-                and st.session_state.last_meta
-            ):
-                meta = st.session_state.last_meta
-                view_stats = summarize_categories(st.session_state.harmonized)
-                view_daily = daily_hotspot_counts(st.session_state.harmonized)
-                view_anom = count_anomalies(view_daily)
-                scanned = meta.get("rows_scanned")
-                scanned_bit = (
-                    f" (scanned {scanned:,})" if scanned else ""
-                )
-                banner = (
-                    f"Loaded {meta.get('raw_rows', 0):,} records from data/ folder"
-                    f"{scanned_bit}, "
-                    f"{view_stats['matched']:,} matched, "
-                    f"{view_anom} anomalies."
-                )
-            render_results(controls, source_banner=banner)
+            render_results(controls)
 
 
 if __name__ == "__main__":
