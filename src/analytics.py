@@ -1,5 +1,5 @@
 """
-Activity analytics: daily totals, anomaly flags, period comparison.
+Activity analytics: daily totals, anomaly flags, FRP helpers, period comparison.
 """
 
 from __future__ import annotations
@@ -9,6 +9,70 @@ import pandas as pd
 from src.harmonize import MATCHED, summarize_categories
 
 ANOMALY_COLOR = "#ff4d6d"
+
+# VIIRS letter codes → numeric stand-ins for threshold checks
+_CONFIDENCE_LETTER = {
+    "h": 100.0,
+    "high": 100.0,
+    "n": 50.0,
+    "nominal": 50.0,
+    "l": 20.0,
+    "low": 20.0,
+}
+
+
+def confidence_to_score(value) -> float | None:
+    """Parse FIRMS confidence (0–100 or VIIRS letter) to a 0–100 score."""
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value).strip().lower()
+    if not text or text in {"nan", "none", "null"}:
+        return None
+    if text in _CONFIDENCE_LETTER:
+        return _CONFIDENCE_LETTER[text]
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+def harmonization_quality(
+    df: pd.DataFrame,
+    *,
+    threshold: float = 80.0,
+) -> float | None:
+    """
+    Share of Matched points with confidence > threshold, as 0–100 percent.
+
+    Returns None when there are no Matched rows to score.
+    """
+    if df is None or df.empty or "category" not in df.columns:
+        return None
+    matched = df[df["category"] == MATCHED]
+    if matched.empty or "confidence" not in matched.columns:
+        return None
+    scores = matched["confidence"].map(confidence_to_score)
+    valid = scores.dropna()
+    if valid.empty:
+        return None
+    return float((valid > threshold).mean() * 100.0)
+
+
+def elevated_activity_last_days(
+    daily: pd.DataFrame,
+    *,
+    days: int = 7,
+) -> bool:
+    """True when any anomaly day falls in the last `days` of the series."""
+    if daily is None or daily.empty or "is_anomaly" not in daily.columns:
+        return False
+    work = daily.copy()
+    work["period"] = pd.to_datetime(work["period"])
+    end = work["period"].max()
+    window = work[work["period"] >= end - pd.Timedelta(days=days - 1)]
+    return bool(window["is_anomaly"].any())
 
 
 def daily_hotspot_counts(
@@ -120,3 +184,22 @@ def summary_sentence(
         f"{matched} matched (high confidence), "
         f"{anomalies} anomalies detected."
     )
+
+
+def latest_month_changes(monthly: pd.DataFrame) -> dict[str, float | None]:
+    """Percent change for the newest month vs the previous one."""
+    if monthly is None or len(monthly) < 2:
+        return {"pct_change_total": None, "pct_change_frp": None}
+    last = monthly.iloc[-1]
+    return {
+        "pct_change_total": (
+            float(last["pct_change_total"])
+            if pd.notna(last.get("pct_change_total"))
+            else None
+        ),
+        "pct_change_frp": (
+            float(last["pct_change_frp"])
+            if pd.notna(last.get("pct_change_frp"))
+            else None
+        ),
+    }

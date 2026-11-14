@@ -24,6 +24,9 @@ from src.analytics import (
     compare_summaries,
     count_anomalies,
     daily_hotspot_counts,
+    elevated_activity_last_days,
+    harmonization_quality,
+    latest_month_changes,
 )
 from src.archive_csv import (
     ArchiveCsvError,
@@ -33,6 +36,7 @@ from src.archive_csv import (
     list_archive_csv_files,
     load_daily_activity,
     load_filtered_csvs,
+    load_monthly_activity,
     peek_archive_date_bounds,
     save_uploaded_csvs,
 )
@@ -324,9 +328,19 @@ def build_activity_chart(
     work = ts.copy() if not ts.empty else pd.DataFrame(columns=["period"])
 
     if daily is not None and not daily.empty:
-        base = daily[
-            ["period", "total", "is_anomaly", "mean_total", "threshold"]
-        ].copy()
+        keep_cols = [
+            c
+            for c in (
+                "period",
+                "total",
+                "frp_sum",
+                "is_anomaly",
+                "mean_total",
+                "threshold",
+            )
+            if c in daily.columns
+        ]
+        base = daily[keep_cols].copy()
         if not work.empty:
             for col in CATEGORY_COLORS:
                 if col in work.columns:
@@ -457,7 +471,21 @@ def build_activity_chart(
                 )
             )
 
-    fig.update_layout(
+    has_frp = "frp_sum" in work.columns and float(work["frp_sum"].fillna(0).sum()) > 0
+    if has_frp:
+        fig.add_trace(
+            go.Scatter(
+                x=work["period"],
+                y=work["frp_sum"],
+                mode="lines",
+                name="FRP (MW)",
+                yaxis="y2",
+                line=dict(color="#fbbf24", width=2.2),
+                hovertemplate="%{x|%Y-%m-%d}<br>FRP: %{y:,.1f} MW<extra></extra>",
+            )
+        )
+
+    layout_kwargs = dict(
         title=dict(
             text=f"Fire activity · {freq_label}",
             x=0,
@@ -479,7 +507,7 @@ def build_activity_chart(
         ),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0, title_text=""),
         hovermode="x unified",
-        margin=dict(l=50, r=20, t=70, b=40),
+        margin=dict(l=50, r=55 if has_frp else 20, t=70, b=40),
         height=440,
         template="plotly_dark",
         paper_bgcolor="rgba(0,0,0,0)",
@@ -488,7 +516,99 @@ def build_activity_chart(
         bargap=0.15,
         uirevision="activity-chart-lite",
     )
+    if has_frp:
+        layout_kwargs["yaxis2"] = dict(
+            title=dict(text="FRP (MW)", font=dict(color="#fbbf24")),
+            overlaying="y",
+            side="right",
+            showgrid=False,
+            rangemode="tozero",
+            tickfont=dict(color="#fbbf24"),
+        )
+    fig.update_layout(**layout_kwargs)
     return fig
+
+
+def build_monthly_trend_chart(monthly: pd.DataFrame) -> go.Figure:
+    """Monthly hotspot counts + FRP with a dual axis."""
+    fig = go.Figure()
+    if monthly is None or monthly.empty:
+        fig.update_layout(
+            template="plotly_dark",
+            height=360,
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+        )
+        return fig
+
+    work = monthly.sort_values("period").copy()
+    work["period"] = pd.to_datetime(work["period"])
+    fig.add_trace(
+        go.Bar(
+            x=work["period"],
+            y=work["total"],
+            name="Hotspots",
+            marker_color="#14919b",
+            opacity=0.85,
+            hovertemplate="%{x|%Y-%m}<br>Hotspots: %{y:,}<extra></extra>",
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=work["period"],
+            y=work["frp_sum"],
+            mode="lines+markers",
+            name="FRP (MW)",
+            yaxis="y2",
+            line=dict(color="#fbbf24", width=2.4),
+            marker=dict(size=7, color="#fbbf24"),
+            hovertemplate="%{x|%Y-%m}<br>FRP: %{y:,.0f} MW<extra></extra>",
+        )
+    )
+    fig.update_layout(
+        title=dict(text="Monthly trend", x=0, xanchor="left", font=dict(size=16)),
+        xaxis=dict(
+            title="Month",
+            showgrid=True,
+            gridcolor="rgba(255,255,255,0.08)",
+            type="date",
+            dtick="M1",
+            tickformat="%Y-%m",
+        ),
+        yaxis=dict(
+            title="Hot spots",
+            showgrid=True,
+            gridcolor="rgba(255,255,255,0.08)",
+            rangemode="tozero",
+        ),
+        yaxis2=dict(
+            title=dict(text="FRP (MW)", font=dict(color="#fbbf24")),
+            overlaying="y",
+            side="right",
+            showgrid=False,
+            rangemode="tozero",
+            tickfont=dict(color="#fbbf24"),
+        ),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0, title_text=""),
+        hovermode="x unified",
+        margin=dict(l=50, r=55, t=70, b=40),
+        height=360,
+        template="plotly_dark",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        bargap=0.25,
+        uirevision="monthly-trend",
+    )
+    return fig
+
+
+def _format_pct(value: float | None) -> str:
+    if value is None:
+        return "—"
+    if value == float("inf"):
+        return "new"
+    sign = "+" if value > 0 else ""
+    return f"{sign}{value:.1f}%"
 
 
 def _parse_date_range(value, today: date) -> tuple[date, date]:
@@ -538,6 +658,7 @@ def _downsample_chart_daily(daily: pd.DataFrame, max_points: int = MAX_CHART_POI
         rule = f"{max(1, span_days // max_points)}D"
     agg = {
         "total": "sum",
+        "frp_sum": "sum",
         MATCHED: "sum",
         MODIS_ONLY: "sum",
         VIIRS_ONLY: "sum",
@@ -613,12 +734,18 @@ def load_map_slice(
         max_rows=int(max_rows),
         known_total=known_total or None,
     )
-    # Keep only lat/lon/category for the map payload (tiny session + JSON)
+    # Keep map payload small; confidence stays for quality scoring
     harmonized = _classify_map_points(raw)
     if not harmonized.empty:
         cols = [
             c
-            for c in ("latitude", "longitude", "category", "acq_datetime")
+            for c in (
+                "latitude",
+                "longitude",
+                "category",
+                "acq_datetime",
+                "confidence",
+            )
             if c in harmonized.columns
         ]
         harmonized = harmonized[cols].copy()
@@ -643,11 +770,20 @@ def load_archive_slice(
 ) -> dict:
     """
     Load archive for any region/date span:
-    - exact daily activity series (SQL aggregate, full range)
-    - point sample for the map (fast classify / optional match)
+    - exact daily + monthly activity (SQL aggregates)
+    - point sample for the map / quality score
     """
     folder = Path(folder_str)
     daily, daily_stats = load_daily_activity(
+        folder,
+        min_lon=min_lon,
+        min_lat=min_lat,
+        max_lon=max_lon,
+        max_lat=max_lat,
+        start=start_iso,
+        end=end_iso,
+    )
+    monthly = load_monthly_activity(
         folder,
         min_lon=min_lon,
         min_lat=min_lat,
@@ -668,12 +804,18 @@ def load_archive_slice(
         int(daily_stats.get("total_count") or 0),
         _map_load_budget((min_lon, min_lat, max_lon, max_lat)),
     )
-    stats = {**(map_payload.get("stats") or {}), **daily_stats}
+    quality = harmonization_quality(map_payload["harmonized"])
+    stats = {
+        **(map_payload.get("stats") or {}),
+        **daily_stats,
+        "harmonization_quality": quality,
+    }
     return {
         "raw_rows": int(daily_stats.get("total_count") or 0),
         "files": map_payload.get("files", []),
         "harmonized": map_payload["harmonized"],
         "daily": daily,
+        "monthly": monthly,
         "stats": stats,
         "mtimes_key": mtimes_key,
     }
@@ -1069,6 +1211,8 @@ def render_results(controls: dict) -> None:
     if isinstance(daily_series, pd.DataFrame) and not daily_series.empty:
         ds = daily_series.copy()
         ds["period"] = pd.to_datetime(ds["period"])
+        if elevated_activity_last_days(ds, days=7):
+            st.warning("Elevated fire activity detected")
         daily_focus = ds[
             (ds["period"] >= pd.Timestamp(focus_start))
             & (ds["period"] < pd.Timestamp(focus_end) + pd.Timedelta(days=1))
@@ -1101,6 +1245,15 @@ def render_results(controls: dict) -> None:
         if not daily_focus.empty and VIIRS_ONLY in daily_focus.columns
         else 0
     )
+    frp_sum = (
+        float(daily_focus["frp_sum"].sum())
+        if not daily_focus.empty and "frp_sum" in daily_focus.columns
+        else float(meta.get("frp_sum") or 0.0)
+    )
+    frp_avg = (frp_sum / exact_total) if exact_total else 0.0
+    quality = meta.get("harmonization_quality")
+    if quality is None and harmonized is not None:
+        quality = harmonization_quality(harmonized)
 
     if meta:
         st.caption(
@@ -1108,12 +1261,16 @@ def render_results(controls: dict) -> None:
             f"focus {focus_start} → {focus_end}"
         )
 
-    c1, c2, c3, c4, c5 = st.columns(5)
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
     c1.metric("Total", f"{exact_total:,}")
-    c2.metric("Busy days", anomalies)
-    c3.metric("MODIS", f"{exact_modis:,}")
-    c4.metric("VIIRS", f"{exact_viirs:,}")
-    c5.metric("Map budget", f"≤{_map_point_limit(bbox):,}")
+    c2.metric("FRP total", f"{frp_sum:,.0f} MW")
+    c3.metric("FRP avg", f"{frp_avg:,.2f} MW")
+    c4.metric("MODIS", f"{exact_modis:,}")
+    c5.metric("VIIRS", f"{exact_viirs:,}")
+    c6.metric(
+        "Harmonization Quality",
+        f"{quality:.0f}%" if quality is not None else "—",
+    )
 
     if comparison is not None and not comparison.empty and harmonized is not None:
         st.divider()
@@ -1195,7 +1352,7 @@ def render_results(controls: dict) -> None:
             tmp = chart_daily.set_index("period").sort_index()
             agg = {
                 k: "sum"
-                for k in ("total", MATCHED, MODIS_ONLY, VIIRS_ONLY)
+                for k in ("total", "frp_sum", MATCHED, MODIS_ONLY, VIIRS_ONLY)
                 if k in tmp.columns
             }
             chart_daily = tmp.resample("W-MON").agg(agg).dropna(how="all").reset_index()
@@ -1214,7 +1371,7 @@ def render_results(controls: dict) -> None:
         ts = chart_daily[
             [
                 c
-                for c in ("period", MATCHED, MODIS_ONLY, VIIRS_ONLY)
+                for c in ("period", MATCHED, MODIS_ONLY, VIIRS_ONLY, "frp_sum")
                 if c in chart_daily.columns
             ]
         ].copy()
@@ -1230,6 +1387,31 @@ def render_results(controls: dict) -> None:
             use_container_width=True,
             config={"displayModeBar": False},
             key="fire_activity",
+        )
+
+    # —— Monthly trend (hotspots + FRP, MoM %) ——
+    monthly = st.session_state.get("monthly_series")
+    if isinstance(monthly, pd.DataFrame) and not monthly.empty:
+        st.subheader("Monthly trend")
+        changes = latest_month_changes(monthly)
+        m1, m2, m3 = st.columns(3)
+        last = monthly.iloc[-1]
+        m1.metric(
+            "Latest month hotspots",
+            f"{int(last['total']):,}",
+            delta=_format_pct(changes["pct_change_total"]),
+        )
+        m2.metric(
+            "Latest month FRP",
+            f"{float(last['frp_sum']):,.0f} MW",
+            delta=_format_pct(changes["pct_change_frp"]),
+        )
+        m3.caption("Delta vs previous month in the selected range.")
+        st.plotly_chart(
+            build_monthly_trend_chart(monthly),
+            use_container_width=True,
+            config={"displayModeBar": False},
+            key="fire_monthly",
         )
 
 
@@ -1319,11 +1501,13 @@ def run_archive_pipeline(controls: dict) -> str | None:
         st.warning("No fires found for this region and date range.")
         st.session_state.harmonized = None
         st.session_state.daily_series = None
+        st.session_state.monthly_series = None
         st.session_state.archive_load_key = None
         st.session_state.comparison = None
         return None
 
     st.session_state.daily_series = daily
+    st.session_state.monthly_series = payload.get("monthly")
     st.session_state.archive_load_key = load_key
     if stats.get("truncated") and total_count > len(primary):
         st.caption(
@@ -1342,6 +1526,9 @@ def run_archive_pipeline(controls: dict) -> str | None:
         "files": payload.get("files", []),
         "rows_scanned": int(stats.get("rows_scanned", 0)),
         "map_sample": int(len(primary)),
+        "frp_sum": float(stats.get("frp_sum") or 0.0),
+        "frp_avg": float(stats.get("frp_avg") or 0.0),
+        "harmonization_quality": stats.get("harmonization_quality"),
     }
 
     st.session_state.comparison = None
@@ -1419,7 +1606,45 @@ def run_nrt_pipeline(controls: dict, map_key: str) -> None:
         st.session_state.comparison = None
         return
 
+    daily = daily_hotspot_counts(
+        primary,
+        start=pd.Timestamp(controls["start_date"]),
+        end=pd.Timestamp(controls["end_date"]),
+    )
+    if "frp" in primary.columns and not daily.empty:
+        frp_daily = (
+            primary.assign(_day=pd.to_datetime(primary["acq_datetime"]).dt.normalize())
+            .groupby("_day", as_index=False)["frp"]
+            .sum()
+            .rename(columns={"_day": "period", "frp": "frp_sum"})
+        )
+        daily = daily.merge(frp_daily, on="period", how="left")
+        daily["frp_sum"] = daily["frp_sum"].fillna(0.0)
+    elif not daily.empty:
+        daily["frp_sum"] = 0.0
+
+    monthly = pd.DataFrame()
+    if not daily.empty:
+        tmp = daily.set_index("period").sort_index()
+        monthly = (
+            tmp.resample("MS")
+            .agg({"total": "sum", "frp_sum": "sum"})
+            .dropna(how="all")
+            .reset_index()
+        )
+        prev_total = monthly["total"].shift(1)
+        prev_frp = monthly["frp_sum"].shift(1)
+        monthly["pct_change_total"] = (
+            (monthly["total"] - prev_total) / prev_total.replace(0, pd.NA) * 100.0
+        )
+        monthly["pct_change_frp"] = (
+            (monthly["frp_sum"] - prev_frp) / prev_frp.replace(0, pd.NA) * 100.0
+        )
+
+    frp_sum = float(primary["frp"].sum()) if "frp" in primary.columns else 0.0
     st.session_state.harmonized = primary
+    st.session_state.daily_series = daily
+    st.session_state.monthly_series = monthly
     st.session_state.last_meta = {
         "region": region_label,
         "bbox": (min_lon, min_lat, max_lon, max_lat),
@@ -1427,6 +1652,9 @@ def run_nrt_pipeline(controls: dict, map_key: str) -> None:
         "end_date": controls["end_date"],
         "raw_rows": int(len(primary)),
         "source": "NRT API",
+        "frp_sum": frp_sum,
+        "frp_avg": (frp_sum / len(primary)) if len(primary) else 0.0,
+        "harmonization_quality": harmonization_quality(primary),
     }
     st.session_state.comparison = None
     st.session_state.comparison_meta = None

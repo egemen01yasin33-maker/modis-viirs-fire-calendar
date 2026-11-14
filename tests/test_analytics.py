@@ -15,6 +15,9 @@ from src.analytics import (
     compare_summaries,
     count_anomalies,
     daily_hotspot_counts,
+    elevated_activity_last_days,
+    harmonization_quality,
+    latest_month_changes,
     summary_sentence,
 )
 from src.harmonize import MATCHED, MODIS_ONLY, VIIRS_ONLY
@@ -80,8 +83,44 @@ def test_compare_summaries_pct():
     assert out["total"]["pct"] == 100.0
 
 
+def test_harmonization_quality_and_alert():
+    df = pd.DataFrame(
+        {
+            "category": [MATCHED, MATCHED, MATCHED, MODIS_ONLY],
+            "confidence": [90, "h", 40, 99],
+        }
+    )
+    # 2 of 3 matched exceed 80 (90 and h); 40 does not → ~66.7%
+    q = harmonization_quality(df)
+    assert q is not None and 66.0 <= q <= 67.0
+
+    daily = pd.DataFrame(
+        {
+            "period": pd.date_range("2025-01-01", periods=10),
+            "total": [2] * 9 + [40],
+            "is_anomaly": [False] * 9 + [True],
+        }
+    )
+    assert elevated_activity_last_days(daily, days=7) is True
+    assert elevated_activity_last_days(daily.iloc[:9], days=7) is False
+
+    monthly = pd.DataFrame(
+        {
+            "period": pd.to_datetime(["2025-01-01", "2025-02-01"]),
+            "total": [100, 150],
+            "frp_sum": [1000.0, 800.0],
+            "pct_change_total": [None, 50.0],
+            "pct_change_frp": [None, -20.0],
+        }
+    )
+    ch = latest_month_changes(monthly)
+    assert ch["pct_change_total"] == 50.0
+    assert ch["pct_change_frp"] == -20.0
+
+
 if __name__ == "__main__":
     test_anomaly_flags_days_over_2x_mean()
     test_summary_sentence()
     test_compare_summaries_pct()
+    test_harmonization_quality_and_alert()
     print("all analytics tests passed")

@@ -340,6 +340,18 @@ def ensure_hotspots_db(folder: Path) -> tuple[Path, bool]:
     path = db_path(folder)
     newest_src = max(p.stat().st_mtime_ns for p in parquet_paths)
     needs = (not path.exists()) or path.stat().st_mtime_ns < newest_src or pq_rebuilt
+    if path.exists() and not needs:
+        # Schema upgrades (e.g. adding frp) force a one-time rebuild
+        probe = duckdb.connect(path.as_posix(), read_only=True)
+        try:
+            cols = {
+                str(r[0]).lower()
+                for r in probe.execute("DESCRIBE hotspots").fetchall()
+            }
+        finally:
+            probe.close()
+        if "frp" not in cols:
+            needs = True
     if needs:
         if path.exists():
             path.unlink()
@@ -355,6 +367,7 @@ def ensure_hotspots_db(folder: Path) -> tuple[Path, bool]:
               CAST(satellite AS VARCHAR) AS satellite,
               CAST(instrument AS VARCHAR) AS instrument,
               CAST(confidence AS VARCHAR) AS confidence,
+              TRY_CAST(frp AS DOUBLE) AS frp,
               CAST(archive_file AS VARCHAR) AS archive_file
             FROM read_parquet(?, union_by_name=true)
             ORDER BY acq_date, longitude, latitude
@@ -604,7 +617,7 @@ def load_daily_activity(
 
     Does not load individual points — safe for Global + multi-year charts.
     Returns (daily_df, stats) with columns:
-      period, total, MODIS-only, VIIRS-only, Matched (High Confidence)=0,
+      period, total, frp_sum, MODIS-only, VIIRS-only, Matched=0,
       is_anomaly, mean_total, threshold
     """
     from src.harmonize import MATCHED, MODIS_ONLY, VIIRS_ONLY
@@ -622,6 +635,7 @@ def load_daily_activity(
             SELECT
               acq_date AS period,
               count(*)::BIGINT AS total,
+              coalesce(sum(frp), 0)::DOUBLE AS frp_sum,
               sum(
                 CASE
                   WHEN lower(coalesce(instrument, '')) LIKE '%modis%'
@@ -645,17 +659,20 @@ def load_daily_activity(
             """,
             [start_s, end_s, min_lon, max_lon, min_lat, max_lat],
         ).df()
-        total_count = int(
-            con.execute(
-                """
-                SELECT count(*) FROM hotspots
-                WHERE acq_date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
-                  AND longitude BETWEEN ? AND ?
-                  AND latitude BETWEEN ? AND ?
-                """,
-                [start_s, end_s, min_lon, max_lon, min_lat, max_lat],
-            ).fetchone()[0]
-        )
+        frp_row = con.execute(
+            """
+            SELECT
+              count(*)::BIGINT AS n,
+              coalesce(sum(frp), 0)::DOUBLE AS frp_sum
+            FROM hotspots
+            WHERE acq_date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
+              AND longitude BETWEEN ? AND ?
+              AND latitude BETWEEN ? AND ?
+            """,
+            [start_s, end_s, min_lon, max_lon, min_lat, max_lat],
+        ).fetchone()
+        total_count = int(frp_row[0] or 0)
+        frp_total = float(frp_row[1] or 0.0)
     finally:
         con.close()
 
@@ -664,6 +681,7 @@ def load_daily_activity(
             columns=[
                 "period",
                 "total",
+                "frp_sum",
                 MATCHED,
                 MODIS_ONLY,
                 VIIRS_ONLY,
@@ -672,13 +690,19 @@ def load_daily_activity(
                 "threshold",
             ]
         )
-        return empty, {"total_count": 0, "days": 0}
+        return empty, {
+            "total_count": 0,
+            "days": 0,
+            "frp_sum": 0.0,
+            "frp_avg": 0.0,
+        }
 
     daily["period"] = pd.to_datetime(daily["period"])
     daily[MODIS_ONLY] = daily["modis_n"].astype(int)
     daily[VIIRS_ONLY] = daily["viirs_n"].astype(int)
     daily[MATCHED] = 0
     daily["total"] = daily["total"].astype(int)
+    daily["frp_sum"] = daily["frp_sum"].astype(float)
     positive = daily.loc[daily["total"] > 0, "total"]
     mean_total = float(positive.mean()) if len(positive) else 0.0
     threshold = mean_total * 2.0
@@ -686,8 +710,79 @@ def load_daily_activity(
     daily["threshold"] = threshold
     daily["is_anomaly"] = (daily["total"] > threshold) & (mean_total > 0)
     daily = daily.drop(columns=["modis_n", "viirs_n"])
-    stats = {"total_count": total_count, "days": int(len(daily))}
+    stats = {
+        "total_count": total_count,
+        "days": int(len(daily)),
+        "frp_sum": frp_total,
+        "frp_avg": (frp_total / total_count) if total_count else 0.0,
+    }
     return daily, stats
+
+
+def load_monthly_activity(
+    folder: Path,
+    min_lon: float,
+    min_lat: float,
+    max_lon: float,
+    max_lat: float,
+    start: date | datetime | str,
+    end: date | datetime | str,
+) -> pd.DataFrame:
+    """
+    Monthly hotspot counts + FRP totals for the selected bbox/dates.
+
+    Columns: period (month-start timestamp), total, frp_sum,
+    pct_change_total, pct_change_frp (vs previous month in the result).
+    """
+    ensure_hotspots_db(folder)
+    import duckdb
+
+    start_s = pd.Timestamp(start).strftime("%Y-%m-%d")
+    end_s = pd.Timestamp(end).strftime("%Y-%m-%d")
+    path = db_path(folder)
+    con = duckdb.connect(path.as_posix(), read_only=True)
+    try:
+        monthly = con.execute(
+            """
+            SELECT
+              date_trunc('month', acq_date) AS period,
+              count(*)::BIGINT AS total,
+              coalesce(sum(frp), 0)::DOUBLE AS frp_sum
+            FROM hotspots
+            WHERE acq_date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
+              AND longitude BETWEEN ? AND ?
+              AND latitude BETWEEN ? AND ?
+            GROUP BY 1
+            ORDER BY 1
+            """,
+            [start_s, end_s, min_lon, max_lon, min_lat, max_lat],
+        ).df()
+    finally:
+        con.close()
+
+    if monthly.empty:
+        return pd.DataFrame(
+            columns=[
+                "period",
+                "total",
+                "frp_sum",
+                "pct_change_total",
+                "pct_change_frp",
+            ]
+        )
+
+    monthly["period"] = pd.to_datetime(monthly["period"])
+    monthly["total"] = monthly["total"].astype(int)
+    monthly["frp_sum"] = monthly["frp_sum"].astype(float)
+    prev_total = monthly["total"].shift(1)
+    prev_frp = monthly["frp_sum"].shift(1)
+    monthly["pct_change_total"] = (
+        (monthly["total"] - prev_total) / prev_total.replace(0, pd.NA) * 100.0
+    )
+    monthly["pct_change_frp"] = (
+        (monthly["frp_sum"] - prev_frp) / prev_frp.replace(0, pd.NA) * 100.0
+    )
+    return monthly
 
 
 def _load_filtered_pandas(
