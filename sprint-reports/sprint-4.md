@@ -18,11 +18,10 @@ We delivered a working Streamlit web application that:
 The prototype demonstrates that MODIS and VIIRS records can be combined into a single, explorable burning activity calendar.
 
 ## Limitations
-- Global datasets are extremely large; full matching is slow and the map uses sampling.
-- Matched counts can be low or zero depending on the selected region and exact matching parameters.
-- Currently runs locally; cloud deployment was not completed due to data size.
-- No automated export of full harmonized tables in the final version.
-- Relies on pre-downloaded FIRMS Archive CSVs rather than fully live long-term API access.
+- Very large selections can make the map slower or less consistent.
+- Matching results depend on the selected region and time window.
+- Currently runs locally.
+- Relies on pre-downloaded FIRMS Archive CSVs for multi-year analysis.
 
 ## Lessons Learned
 - FIRMS Archive is the practical way to obtain multi-year data.
@@ -30,7 +29,7 @@ The prototype demonstrates that MODIS and VIIRS records can be combined into a s
 - Clear statistics and anomaly highlighting are more valuable to users than raw point counts.
 
 ## Future Work
-- Optimize matching for larger datasets.
+- Improve performance on large datasets.
 - Deploy a lighter version to Streamlit Community Cloud.
 - Add confidence and FRP-based filtering.
 - Include a simple downloadable summary report.
