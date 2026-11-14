@@ -23,12 +23,18 @@ from streamlit_folium import st_folium
 
 from src.firms_api import (
     AVAILABLE_SENSORS,
-    MAX_DAY_RANGE,
     PRESET_REGIONS,
     FirmsApiError,
     fetch_firms_area,
     resolve_place_bbox,
 )
+
+# NRT day-window limit (also defined in firms_api; keep a local fallback)
+try:
+    from src.firms_api import MAX_DAY_RANGE
+except ImportError:  # pragma: no cover — older firms_api without the constant
+    MAX_DAY_RANGE = 10
+
 from src.harmonize import (
     CATEGORY_COLORS,
     MATCHED,

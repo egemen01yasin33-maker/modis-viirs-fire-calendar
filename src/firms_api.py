@@ -54,8 +54,21 @@ AVAILABLE_SENSORS = (
     "VIIRS_NOAA21_NRT",
 )
 
-# NRT Area API allows at most 10 days ending on a given date
-MAX_DAY_RANGE = 10
+# NRT Area API allows at most 10 days ending on a given date.
+# Exported for app.py date-range UI captions / validation.
+MAX_DAY_RANGE: int = 10
+
+__all__ = (
+    "AVAILABLE_SENSORS",
+    "CITY_BBOXES",
+    "FIRMS_AREA_BASE",
+    "MAX_DAY_RANGE",
+    "PRESET_REGIONS",
+    "FirmsApiError",
+    "fetch_firms_area",
+    "fetch_sensor_area",
+    "resolve_place_bbox",
+)
 
 _INVALID_KEY_MARKERS = (
     "invalid map_key",
