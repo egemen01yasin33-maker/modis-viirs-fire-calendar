@@ -13,12 +13,11 @@ import os
 from datetime import date, timedelta
 from pathlib import Path
 
-import folium
 import pandas as pd
+import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 from dotenv import load_dotenv
-from streamlit_folium import st_folium
 
 from src.analytics import (
     ANOMALY_COLOR,
@@ -28,10 +27,9 @@ from src.analytics import (
 )
 from src.archive_csv import (
     ArchiveCsvError,
-    cache_dir,
     data_dir,
     describe_csv_files,
-    ensure_parquet_cache,
+    ensure_hotspots_db,
     list_archive_csv_files,
     load_filtered_csvs,
     peek_archive_date_bounds,
@@ -101,7 +99,7 @@ def _map_zoom_for_bbox(
     return 7
 
 
-MAX_MAP_POINTS = 1_500
+MAX_MAP_POINTS = 1_200
 
 
 def _sample_for_map(df: pd.DataFrame, limit: int = MAX_MAP_POINTS) -> pd.DataFrame:
@@ -110,7 +108,7 @@ def _sample_for_map(df: pd.DataFrame, limit: int = MAX_MAP_POINTS) -> pd.DataFra
         return df
     matched = df[df["category"] == MATCHED]
     others = df[df["category"] != MATCHED]
-    keep_matched = min(len(matched), max(limit // 3, 300))
+    keep_matched = min(len(matched), max(limit // 3, 250))
     keep_others = limit - keep_matched
     parts = []
     if keep_matched and not matched.empty:
@@ -123,59 +121,52 @@ def _sample_for_map(df: pd.DataFrame, limit: int = MAX_MAP_POINTS) -> pd.DataFra
     return pd.concat(parts, ignore_index=True)
 
 
-def build_map(
+def build_map_figure(
     df: pd.DataFrame,
     bbox: tuple[float, float, float, float] | None = None,
-) -> folium.Map:
-    """Folium map with OpenStreetMap tiles (no API key)."""
-    from folium.plugins import MarkerCluster
-
+) -> go.Figure:
+    """Fast Plotly map on OpenStreetMap (no Folium HTML cost)."""
     plot_df = _sample_for_map(df)
     if plot_df.empty:
-        center_lat, center_lon, zoom = 20.0, 0.0, 2
-    elif bbox is not None:
+        fig = go.Figure()
+        fig.update_layout(
+            map_style="open-street-map",
+            map=dict(center=dict(lat=20, lon=0), zoom=1),
+            height=480,
+            margin=dict(l=0, r=0, t=0, b=0),
+        )
+        return fig
+
+    if bbox is not None:
         min_lon, min_lat, max_lon, max_lat = bbox
         center_lat = (min_lat + max_lat) / 2.0
         center_lon = (min_lon + max_lon) / 2.0
-        zoom = _map_zoom_for_bbox(min_lon, min_lat, max_lon, max_lat)
+        zoom = float(_map_zoom_for_bbox(min_lon, min_lat, max_lon, max_lat))
     else:
         center_lat = float(plot_df["latitude"].mean())
         center_lon = float(plot_df["longitude"].mean())
-        zoom = 7
+        zoom = 5.0
 
-    fmap = folium.Map(
-        location=[center_lat, center_lon],
-        zoom_start=zoom,
-        tiles="OpenStreetMap",
-        prefer_canvas=True,
-        control_scale=True,
+    color_map = {k: v for k, v in CATEGORY_COLORS.items()}
+    fig = px.scatter_map(
+        plot_df,
+        lat="latitude",
+        lon="longitude",
+        color="category",
+        color_discrete_map=color_map,
+        category_orders={"category": list(CATEGORY_COLORS.keys())},
+        zoom=zoom,
+        height=480,
     )
-
-    for category, color in CATEGORY_COLORS.items():
-        subset = plot_df[plot_df["category"] == category]
-        if subset.empty:
-            continue
-        full_n = int((df["category"] == category).sum()) if not df.empty else len(subset)
-        cluster = MarkerCluster(
-            name=f"{category} ({full_n})",
-            show=True,
-            disableClusteringAtZoom=9,
-        )
-        # Compact HTML markers via CircleMarker inside clusters
-        for row in subset.itertuples(index=False):
-            folium.CircleMarker(
-                location=[row.latitude, row.longitude],
-                radius=5 if category == MATCHED else 4,
-                color=color,
-                fill=True,
-                fill_color=color,
-                fill_opacity=0.75,
-                weight=1,
-            ).add_to(cluster)
-        cluster.add_to(fmap)
-
-    folium.LayerControl(collapsed=True).add_to(fmap)
-    return fmap
+    fig.update_traces(marker=dict(size=7, opacity=0.85))
+    fig.update_layout(
+        map_style="open-street-map",
+        map=dict(center=dict(lat=center_lat, lon=center_lon), zoom=zoom),
+        margin=dict(l=0, r=0, t=0, b=0),
+        legend=dict(orientation="h", yanchor="bottom", y=0.01, x=0.01),
+        uirevision="fire-map",
+    )
+    return fig
 
 
 def build_activity_chart(
@@ -424,7 +415,7 @@ def render_control_panel(
 
     compare_mode = st.toggle("Compare two periods", value=False)
 
-    col_region, col_dates, col_action = st.columns((1.5, 1.4, 0.7))
+    col_region, col_dates = st.columns((1.6, 1.2))
 
     with col_region:
         region_mode = st.radio(
@@ -486,14 +477,15 @@ def render_control_panel(
                 compare_range, compare_default_end
             )
 
-    with col_action:
-        st.write("")
-        st.write("")
-        fetch_clicked = st.button(
-            "Update map",
-            type="primary",
-            use_container_width=True,
-        )
+        # Archive updates live on every control change; NRT still needs a click
+        if source_mode == "NRT API":
+            fetch_clicked = st.button(
+                "Fetch live data",
+                type="primary",
+                use_container_width=True,
+            )
+        else:
+            fetch_clicked = True
 
     freq_choice = st.radio(
         "Calendar",
@@ -572,8 +564,13 @@ def render_results(controls: dict) -> None:
     with left:
         st.subheader("Map")
         st.caption("Matched · MODIS only · VIIRS only")
-        fmap = build_map(harmonized, bbox=bbox)
-        st_folium(fmap, width=None, height=480, returned_objects=[])
+        map_fig = build_map_figure(harmonized, bbox=bbox)
+        st.plotly_chart(
+            map_fig,
+            use_container_width=True,
+            config={"displayModeBar": False},
+            key="fire_map",
+        )
 
     with right:
         st.subheader("Activity")
@@ -593,7 +590,12 @@ def render_results(controls: dict) -> None:
                 freq_choice,
                 daily=daily,
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(
+                fig,
+                use_container_width=True,
+                config={"displayModeBar": False},
+                key="fire_activity",
+            )
 
     with st.expander("Harmonized table", expanded=False):
         show_cols = [
@@ -646,38 +648,32 @@ def run_archive_pipeline(controls: dict) -> str | None:
     start_iso = controls["start_date"].isoformat()
     end_iso = controls["end_date"].isoformat()
 
-    # First visit may build a Parquet cache (one-time); later updates are fast
-    cache_path = cache_dir(DATA_PATH)
-    need_prepare = any(
-        (not (cache_path / f"{p.stem}.parquet").exists())
-        or (
-            (cache_path / f"{p.stem}.parquet").stat().st_mtime_ns
-            < p.stat().st_mtime_ns
-        )
-        for p in list_archive_csv_files(DATA_PATH)
-    )
-    if need_prepare:
-        with st.spinner("Preparing archive for fast map updates (one-time)…"):
-            ensure_parquet_cache(DATA_PATH)
+    # One-time DuckDB index; later region/date changes should feel instant
+    try:
+        _, rebuilt = ensure_hotspots_db(DATA_PATH)
+    except ArchiveCsvError as exc:
+        st.error(str(exc))
+        return None
+    if rebuilt:
+        st.toast("Archive index ready — map updates are now instant.")
 
-    with st.spinner("Updating map…"):
-        try:
-            payload = load_archive_slice(
-                str(DATA_PATH),
-                mtimes,
-                min_lon,
-                min_lat,
-                max_lon,
-                max_lat,
-                start_iso,
-                end_iso,
-            )
-        except ArchiveCsvError as exc:
-            st.error(str(exc))
-            return None
-        except Exception:  # noqa: BLE001
-            st.error("Could not load fire data for this selection.")
-            return None
+    try:
+        payload = load_archive_slice(
+            str(DATA_PATH),
+            mtimes,
+            min_lon,
+            min_lat,
+            max_lon,
+            max_lat,
+            start_iso,
+            end_iso,
+        )
+    except ArchiveCsvError as exc:
+        st.error(str(exc))
+        return None
+    except Exception:  # noqa: BLE001
+        st.error("Could not load fire data for this selection.")
+        return None
 
     primary = payload["harmonized"]
     stats = payload.get("stats") or {}
@@ -821,6 +817,25 @@ def run_nrt_pipeline(controls: dict, map_key: str) -> None:
             }
 
 
+@st.fragment
+def live_archive_explorer(
+    archive_date_min: date | None,
+    archive_date_max: date | None,
+) -> None:
+    """
+    Region/date controls + results in one fragment so changes re-run only
+    this block (near-instant map updates, no full-page reload).
+    """
+    controls = render_control_panel(
+        "Archive CSV",
+        archive_date_min=archive_date_min,
+        archive_date_max=archive_date_max,
+    )
+    run_archive_pipeline(controls)
+    if st.session_state.harmonized is not None:
+        render_results(controls)
+
+
 def main() -> None:
     st.title("Unified Fire Activity Calendar")
     st.caption("MODIS and VIIRS fire activity on one map.")
@@ -855,28 +870,22 @@ def main() -> None:
                     st.rerun()
             return
 
-    results_area = st.container()
-    st.divider()
-    controls = render_control_panel(
-        source_mode,
-        archive_date_min=archive_date_min,
-        archive_date_max=archive_date_max,
-    )
-
-    if source_mode == "Archive CSV":
-        should_run = (
-            controls["fetch_clicked"]
-            or st.session_state.harmonized is None
-            or (st.session_state.last_meta or {}).get("source") != "Archive CSV"
+        st.divider()
+        controls = render_control_panel(
+            source_mode,
+            archive_date_min=archive_date_min,
+            archive_date_max=archive_date_max,
         )
-        if should_run:
-            run_archive_pipeline(controls)
-    elif controls["fetch_clicked"]:
-        run_nrt_pipeline(controls, get_firms_map_key())
-
-    if st.session_state.harmonized is not None:
-        with results_area:
+        if controls["fetch_clicked"]:
+            run_nrt_pipeline(controls, map_key)
+        if st.session_state.harmonized is not None:
             render_results(controls)
+        return
+
+    # Archive: live updates as soon as region/dates change
+    st.caption("Change region or dates — the map updates immediately.")
+    st.divider()
+    live_archive_explorer(archive_date_min, archive_date_max)
 
 
 if __name__ == "__main__":

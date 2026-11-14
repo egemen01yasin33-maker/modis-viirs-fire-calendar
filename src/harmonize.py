@@ -137,16 +137,28 @@ def prepare_firms(df: pd.DataFrame) -> pd.DataFrame:
             "Eksik FIRMS sütunları: " + ", ".join(missing)
         )
 
-    out = _normalize_columns(df)
-    instrument = out["instrument"] if "instrument" in out.columns else None
-
-    sensors: list[str | None] = []
-    for i, sat in enumerate(out["satellite"].astype(str)):
-        inst = None if instrument is None else str(instrument.iloc[i])
-        sensors.append(classify_sensor(sat, inst))
-
-    out = out.copy()
-    out["sensor"] = sensors
+    out = _normalize_columns(df).copy()
+    sat = out["satellite"].astype(str)
+    inst = (
+        out["instrument"].astype(str)
+        if "instrument" in out.columns
+        else pd.Series("", index=out.index)
+    )
+    text = (sat + " " + inst).str.lower()
+    sensor = pd.Series(pd.NA, index=out.index, dtype=object)
+    modis_mask = text.str.contains("|".join(_MODIS_TOKENS), regex=True, na=False)
+    sensor = sensor.mask(modis_mask, "MODIS")
+    sat_l = sat.str.strip().str.lower()
+    n_code = sat_l.str.match(r"^n\d*$", na=False)
+    viirs_mask = (
+        (~modis_mask)
+        & (
+            text.str.contains("|".join(_VIIRS_TOKENS), regex=True, na=False)
+            | n_code
+        )
+    )
+    sensor = sensor.mask(viirs_mask, "VIIRS")
+    out["sensor"] = sensor
     out["acq_datetime"] = parse_acquisition_datetime(out)
 
     # Geçerli koordinat / zaman / sensör
@@ -208,24 +220,43 @@ def harmonize_hotspots(
 
     used_viirs: set[int] = set()
     max_delta = np.timedelta64(int(time_window_hours * 3600), "s")
+    # ~1 km cells + 6h time bins → only compare nearby candidates (near O(n))
+    cell_deg = max(distance_km / 111.0, 0.005)
+    time_bin_ns = int(time_window_hours * 3600 * 1e9)
 
-    # Her MODIS için aday VIIRS'ler arasından en yakını seç
-    for i in range(len(modis)):
-        # Zaman filtresi (vektörel)
-        dt = np.abs(viirs_t - modis_t[i])
-        time_ok = dt <= max_delta
-        if not np.any(time_ok):
+    from collections import defaultdict
+
+    buckets: dict[tuple[int, int, int], list[int]] = defaultdict(list)
+    viirs_t_int = viirs_t.astype("datetime64[ns]").astype(np.int64)
+    for j in range(len(viirs_idx)):
+        gx = int(np.floor(viirs_lon[j] / cell_deg))
+        gy = int(np.floor(viirs_lat[j] / cell_deg))
+        gt = int(viirs_t_int[j] // time_bin_ns)
+        buckets[(gx, gy, gt)].append(j)
+
+    modis_t_int = modis_t.astype("datetime64[ns]").astype(np.int64)
+    for i in range(len(modis_idx)):
+        gx = int(np.floor(modis_lon[i] / cell_deg))
+        gy = int(np.floor(modis_lat[i] / cell_deg))
+        gt = int(modis_t_int[i] // time_bin_ns)
+        cand: list[int] = []
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                for dt_bin in (-1, 0, 1):
+                    cand.extend(buckets.get((gx + dx, gy + dy, gt + dt_bin), ()))
+        if not cand:
             continue
-
-        cand_local = np.where(time_ok)[0]
-        # Zaten eşleşmiş VIIRS'leri çıkar
-        cand_local = np.array(
-            [j for j in cand_local if int(viirs_idx[j]) not in used_viirs],
+        cand_local = np.fromiter(
+            (j for j in cand if int(viirs_idx[j]) not in used_viirs),
             dtype=int,
         )
         if cand_local.size == 0:
             continue
-
+        dt = np.abs(viirs_t[cand_local] - modis_t[i])
+        time_ok = dt <= max_delta
+        if not np.any(time_ok):
+            continue
+        cand_local = cand_local[time_ok]
         dists = haversine_km(
             modis_lat[i],
             modis_lon[i],
@@ -235,8 +266,6 @@ def harmonize_hotspots(
         within = dists <= distance_km
         if not np.any(within):
             continue
-
-        # En yakın geçerli aday
         within_local = cand_local[within]
         within_dists = dists[within]
         best = int(within_local[np.argmin(within_dists)])

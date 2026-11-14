@@ -22,11 +22,23 @@ class ArchiveCsvError(Exception):
 
 DATA_DIRNAME = "data"
 CACHE_DIRNAME = "_cache"
+DB_FILENAME = "fires.duckdb"
 CHUNK_SIZE = 250_000
 # Soft cap after bbox+date filter — beyond this, ask the user to narrow scope
 MAX_FILTERED_ROWS = 400_000
 # Tiny fixtures kept in data/ for unit tests — skip in Archive mode inventory
 SKIP_FILENAMES = frozenset({"sample_firms.csv"})
+# Columns needed for harmonization + map (keep the query narrow/fast)
+QUERY_COLUMNS = (
+    "latitude",
+    "longitude",
+    "acq_date",
+    "acq_time",
+    "satellite",
+    "instrument",
+    "confidence",
+    "archive_file",
+)
 USECOLS = (
     "latitude",
     "longitude",
@@ -288,6 +300,71 @@ def ensure_parquet_cache(folder: Path) -> tuple[list[Path], int]:
     return paths, rebuilt
 
 
+def db_path(folder: Path) -> Path:
+    """Persistent DuckDB file used for instant bbox/date filters."""
+    return cache_dir(folder) / DB_FILENAME
+
+
+def ensure_hotspots_db(folder: Path) -> tuple[Path, bool]:
+    """
+    Build a sorted DuckDB `hotspots` table from the Parquet cache.
+
+    Returns (db_path, rebuilt). Rebuilt only when CSVs/parquets are newer.
+    """
+    import duckdb
+
+    parquet_paths, pq_rebuilt = ensure_parquet_cache(folder)
+    if not parquet_paths:
+        raise ArchiveCsvError(
+            "Could not prepare archive cache from the CSV files in data/."
+        )
+
+    # Older parquet without archive_file → rebuild
+    probe_con = duckdb.connect()
+    probe = probe_con.execute(
+        f"DESCRIBE SELECT * FROM read_parquet('{parquet_paths[0].as_posix()}')"
+    ).fetchdf()
+    probe_con.close()
+    cols = {str(c).lower() for c in probe["column_name"].tolist()}
+    if "archive_file" not in cols:
+        for p in parquet_paths:
+            p.unlink(missing_ok=True)
+        parquet_paths, pq_rebuilt = ensure_parquet_cache(folder)
+        if not parquet_paths:
+            raise ArchiveCsvError(
+                "Could not prepare archive cache from the CSV files in data/."
+            )
+
+    path = db_path(folder)
+    newest_src = max(p.stat().st_mtime_ns for p in parquet_paths)
+    needs = (not path.exists()) or path.stat().st_mtime_ns < newest_src or pq_rebuilt
+    if needs:
+        if path.exists():
+            path.unlink()
+        con = duckdb.connect(path.as_posix())
+        con.execute(
+            """
+            CREATE TABLE hotspots AS
+            SELECT
+              CAST(latitude AS DOUBLE) AS latitude,
+              CAST(longitude AS DOUBLE) AS longitude,
+              CAST(acq_date AS DATE) AS acq_date,
+              CAST(acq_time AS VARCHAR) AS acq_time,
+              CAST(satellite AS VARCHAR) AS satellite,
+              CAST(instrument AS VARCHAR) AS instrument,
+              CAST(confidence AS VARCHAR) AS confidence,
+              CAST(archive_file AS VARCHAR) AS archive_file
+            FROM read_parquet(?, union_by_name=true)
+            ORDER BY acq_date, longitude, latitude
+            """,
+            [[p.as_posix() for p in parquet_paths]],
+        )
+        con.execute("CHECKPOINT")
+        con.close()
+        return path, True
+    return path, False
+
+
 def load_filtered_csvs(
     folder: Path,
     min_lon: float,
@@ -303,7 +380,7 @@ def load_filtered_csvs(
     """
     Keep rows inside bbox + date window.
 
-    Prefers a Parquet cache queried with DuckDB (~0.3s). Falls back to
+    Prefers a persistent DuckDB table (near-instant). Falls back to
     chunked pandas CSV scans if DuckDB is unavailable.
     """
     files = list_archive_csv_files(folder) or list_csv_files(folder)
@@ -360,54 +437,25 @@ def _load_filtered_duckdb(
 ) -> tuple[pd.DataFrame, list[str], dict]:
     import duckdb
 
-    parquet_paths, rebuilt = ensure_parquet_cache(folder)
-    if not parquet_paths:
-        raise ArchiveCsvError(
-            "Could not prepare archive cache from the CSV files in data/."
-        )
-
-    # Existing cache files may predate archive_file column — rebuild if missing
-    con = duckdb.connect()
-    probe = con.execute(
-        f"DESCRIBE SELECT * FROM read_parquet('{parquet_paths[0].as_posix()}')"
-    ).fetchdf()
-    cols = {str(c).lower() for c in probe["column_name"].tolist()}
-    if "archive_file" not in cols:
-        for p in parquet_paths:
-            p.unlink(missing_ok=True)
-        parquet_paths, rebuilt = ensure_parquet_cache(folder)
-        if not parquet_paths:
-            raise ArchiveCsvError(
-                "Could not prepare archive cache from the CSV files in data/."
-            )
-
-    # Limit early so huge world queries stay bounded
-    df = con.execute(
-        """
-        SELECT
-          latitude, longitude, brightness, scan, track,
-          CAST(acq_date AS VARCHAR) AS acq_date,
-          CAST(acq_time AS VARCHAR) AS acq_time,
-          satellite, instrument, confidence, version,
-          bright_t31, frp, daynight, type,
-          archive_file
-        FROM read_parquet(?, union_by_name=true)
-        WHERE longitude BETWEEN ? AND ?
-          AND latitude BETWEEN ? AND ?
-          AND CAST(acq_date AS VARCHAR) BETWEEN ? AND ?
-        LIMIT ?
-        """,
-        [
-            [p.as_posix() for p in parquet_paths],
-            min_lon,
-            max_lon,
-            min_lat,
-            max_lat,
-            start_s,
-            end_s,
-            max_rows + 1,
-        ],
-    ).df()
+    path, rebuilt = ensure_hotspots_db(folder)
+    con = duckdb.connect(path.as_posix(), read_only=True)
+    try:
+        df = con.execute(
+            """
+            SELECT
+              latitude, longitude,
+              CAST(acq_date AS VARCHAR) AS acq_date,
+              acq_time, satellite, instrument, confidence, archive_file
+            FROM hotspots
+            WHERE acq_date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
+              AND longitude BETWEEN ? AND ?
+              AND latitude BETWEEN ? AND ?
+            LIMIT ?
+            """,
+            [start_s, end_s, min_lon, max_lon, min_lat, max_lat, max_rows + 1],
+        ).df()
+    finally:
+        con.close()
 
     truncated = len(df) > max_rows
     if truncated:
@@ -419,8 +467,8 @@ def _load_filtered_duckdb(
         "rows_kept": int(len(df)),
         "truncated": truncated,
         "errors": [],
-        "engine": "duckdb",
-        "cache_rebuilt": rebuilt,
+        "engine": "duckdb-table",
+        "cache_rebuilt": int(rebuilt),
     }
     return df, names, stats
 
