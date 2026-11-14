@@ -43,7 +43,7 @@ def test_parse_invalid_key_message():
         _parse_csv_response("Invalid MAP_KEY or something")
         assert False, "expected FirmsApiError"
     except FirmsApiError as exc:
-        assert "Geçersiz MAP_KEY" in str(exc)
+        assert "Invalid MAP_KEY" in str(exc)
         assert "something" not in str(exc) or "MAP_KEY" in str(exc)
 
 

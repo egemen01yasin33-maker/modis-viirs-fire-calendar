@@ -1,8 +1,8 @@
 """
-NASA FIRMS Area API istemcisi.
+NASA FIRMS Area API client.
 
-MAP_KEY hiçbir zaman loglanmaz veya diske yazılmaz; hata mesajlarında
-anahtar veya anahtar içeren URL gösterilmez.
+MAP_KEY is never logged or written to disk; error messages never include
+the key or a URL that contains it.
 """
 
 from __future__ import annotations
@@ -15,12 +15,12 @@ import requests
 
 FIRMS_AREA_BASE = "https://firms.modaps.eosdis.nasa.gov/api/area/csv"
 
-# Hazır bölgeler: (min_lon, min_lat, max_lon, max_lat)
+# Preset regions: (min_lon, min_lat, max_lon, max_lat)
 PRESET_REGIONS: dict[str, tuple[float, float, float, float]] = {
-    "Türkiye": (25.5, 35.8, 45.0, 42.3),
-    "Akdeniz Bölgesi": (27.5, 36.0, 37.5, 38.5),
-    "Ege": (26.0, 36.5, 30.0, 40.0),
-    "İç Anadolu": (31.0, 37.5, 36.0, 41.0),
+    "Turkey": (25.5, 35.8, 45.0, 42.3),
+    "Mediterranean": (27.5, 36.0, 37.5, 38.5),
+    "Aegean": (26.0, 36.5, 30.0, 40.0),
+    "Central Anatolia": (31.0, 37.5, 36.0, 41.0),
 }
 
 AVAILABLE_SENSORS = (
@@ -29,7 +29,6 @@ AVAILABLE_SENSORS = (
     "VIIRS_NOAA21_NRT",
 )
 
-# FIRMS sık dönen hata ifadeleri (yanıt gövdesinde aranır)
 _INVALID_KEY_MARKERS = (
     "invalid map_key",
     "invalid map key",
@@ -41,11 +40,11 @@ _INVALID_KEY_MARKERS = (
 
 
 class FirmsApiError(Exception):
-    """Kullanıcıya gösterilebilir FIRMS API hatası (anahtar içermez)."""
+    """User-facing FIRMS API error (never contains the key)."""
 
 
 def _redact_key(text: str, map_key: str) -> str:
-    """Metinden MAP_KEY sızıntısını temizler (savunma amaçlı)."""
+    """Strip MAP_KEY leakage from text (defense in depth)."""
     if not map_key:
         return text
     return text.replace(map_key, "[REDACTED]")
@@ -70,42 +69,39 @@ def _looks_like_invalid_key(body: str) -> bool:
 
 
 def _parse_csv_response(text: str) -> pd.DataFrame:
-    """FIRMS CSV metnini DataFrame'e çevirir; veri yoksa boş tablo."""
+    """Parse FIRMS CSV text into a DataFrame; empty body → empty table."""
     stripped = text.strip()
     if not stripped:
         return pd.DataFrame()
 
-    # HTML / düz metin hata yanıtları
     if stripped.lower().startswith("<!doctype") or stripped.lower().startswith(
         "<html"
     ):
         raise FirmsApiError(
-            "FIRMS API beklenmeyen bir HTML yanıtı döndü. "
-            "MAP_KEY veya istek parametrelerini kontrol edin."
+            "FIRMS returned unexpected HTML. "
+            "Check your MAP_KEY and request parameters."
         )
 
     if _looks_like_invalid_key(stripped):
         raise FirmsApiError(
-            "Geçersiz MAP_KEY. NASA FIRMS hesabınızdan geçerli bir anahtar alın."
+            "Invalid MAP_KEY. Get a valid key from your NASA FIRMS account."
         )
 
-    # Tek satırlık hata mesajı (CSV başlığı değil)
     first_line = stripped.splitlines()[0]
     if "latitude" not in first_line.lower() and "," not in first_line:
-        # Anahtar içermeyen kısa hata metni
-        message = first_line.strip()[:200] or "Bilinmeyen FIRMS hatası."
+        message = first_line.strip()[:200] or "Unknown FIRMS error."
         if _looks_like_invalid_key(message):
             raise FirmsApiError(
-                "Geçersiz MAP_KEY. NASA FIRMS hesabınızdan geçerli bir anahtar alın."
+                "Invalid MAP_KEY. Get a valid key from your NASA FIRMS account."
             )
-        raise FirmsApiError(f"FIRMS API hatası: {message}")
+        raise FirmsApiError(f"FIRMS API error: {message}")
 
     try:
         df = pd.read_csv(io.StringIO(stripped))
     except Exception as exc:  # noqa: BLE001
         raise FirmsApiError(
-            "FIRMS yanıtı CSV olarak okunamadı. "
-            "MAP_KEY ve bölge parametrelerini kontrol edin."
+            "Could not parse the FIRMS response as CSV. "
+            "Check your MAP_KEY and region parameters."
         ) from exc
 
     return df
@@ -121,14 +117,9 @@ def fetch_sensor_area(
     days: int,
     timeout: float = 60.0,
 ) -> pd.DataFrame:
-    """
-    Tek bir sensör için Area API CSV'sini indirir.
-
-    Raises:
-        FirmsApiError: geçersiz key, bağlantı veya parse hataları.
-    """
+    """Download Area API CSV for a single sensor."""
     if sensor not in AVAILABLE_SENSORS:
-        raise FirmsApiError(f"Desteklenmeyen sensör: {sensor}")
+        raise FirmsApiError(f"Unsupported sensor: {sensor}")
 
     url = _build_url(map_key, sensor, min_lon, min_lat, max_lon, max_lat, days)
 
@@ -136,36 +127,34 @@ def fetch_sensor_area(
         response = requests.get(url, timeout=timeout)
     except requests.Timeout as exc:
         raise FirmsApiError(
-            "FIRMS API zaman aşımına uğradı. İnternet bağlantınızı deneyin "
-            "veya daha küçük bir bölge / daha az gün seçin."
+            "FIRMS API timed out. Check your connection or try a smaller "
+            "region / fewer days."
         ) from exc
     except requests.ConnectionError as exc:
         raise FirmsApiError(
-            "FIRMS API'ye bağlanılamadı. İnternet bağlantınızı kontrol edin."
+            "Could not connect to the FIRMS API. Check your internet connection."
         ) from exc
     except requests.RequestException as exc:
-        # Anahtar URL'de olabilir; mesajı süz
         safe = _redact_key(str(exc), map_key)
-        raise FirmsApiError(f"FIRMS bağlantı hatası: {safe}") from exc
+        raise FirmsApiError(f"FIRMS connection error: {safe}") from exc
 
     if response.status_code in (401, 403):
         raise FirmsApiError(
-            "Geçersiz veya yetkisiz MAP_KEY. "
-            "https://firms.modaps.eosdis.nasa.gov/api/ adresinden yeni anahtar alın."
+            "Invalid or unauthorized MAP_KEY. "
+            "Get a new key at https://firms.modaps.eosdis.nasa.gov/api/."
         )
 
     if response.status_code == 404:
         raise FirmsApiError(
-            "FIRMS uç noktası bulunamadı (404). Sensör adını ve bbox değerlerini kontrol edin."
+            "FIRMS endpoint not found (404). Check the sensor name and bbox."
         )
 
     if response.status_code >= 400:
         raise FirmsApiError(
-            f"FIRMS API HTTP {response.status_code} döndü. "
-            "İstek parametrelerini kontrol edip yeniden deneyin."
+            f"FIRMS API returned HTTP {response.status_code}. "
+            "Check your request parameters and try again."
         )
 
-    # Yanıt gövdesinde anahtar aranmaz; yalnızca içerik parse edilir
     return _parse_csv_response(response.text)
 
 
@@ -178,29 +167,24 @@ def fetch_firms_area(
     max_lat: float,
     days: int,
 ) -> pd.DataFrame:
-    """
-    Seçilen sensörler için Area API çağrılarını birleştirir.
-
-    Boş sonuçlarda boş DataFrame döner (exception değil); tamamen başarısız
-    istekler FirmsApiError fırlatır.
-    """
+    """Fetch and concatenate Area API results for the selected sensors."""
     key = (map_key or "").strip()
     if not key:
         raise FirmsApiError(
-            "MAP_KEY gerekli. `.env` dosyasına FIRMS_MAP_KEY ekleyin."
+            "MAP_KEY is required. Add FIRMS_MAP_KEY to your .env file."
         )
 
     sensor_list = [s for s in sensors if s]
     if not sensor_list:
-        raise FirmsApiError("En az bir sensör seçin.")
+        raise FirmsApiError("Select at least one sensor.")
 
     if not (min_lon < max_lon and min_lat < max_lat):
         raise FirmsApiError(
-            "Geçersiz bbox: min_lon < max_lon ve min_lat < max_lat olmalı."
+            "Invalid bbox: require min_lon < max_lon and min_lat < max_lat."
         )
 
     if days < 1 or days > 10:
-        raise FirmsApiError("Gün sayısı 1 ile 10 arasında olmalıdır.")
+        raise FirmsApiError("Day count must be between 1 and 10.")
 
     frames: list[pd.DataFrame] = []
     for sensor in sensor_list:
@@ -208,7 +192,6 @@ def fetch_firms_area(
             key, sensor, min_lon, min_lat, max_lon, max_lat, days
         )
         if df is not None and not df.empty:
-            # Kaynak sensör etiketini koru (harmonizasyon instrument/satellite kullanır)
             df = df.copy()
             df["firms_source"] = sensor
             frames.append(df)

@@ -1,11 +1,11 @@
 """
 Unified Fire Activity Calendar
 
-NASA Space Apps Challenge 2026 – MODIS ve VIIRS hot spot harmonizasyonu.
-FIRMS Area API'den veri çeker; 1 km / ±6 saat ile eşleştirir; harita ve
-aktivite takviminde gösterir.
+NASA Space Apps Challenge 2026 – MODIS & VIIRS hot spot harmonization.
+Fetches FIRMS Area API data, matches within 1 km / ±6 hours, and shows
+map + activity calendar views.
 
-FIRMS_MAP_KEY .env dosyasından okunur; loglanmaz ve Git'e eklenmez.
+FIRMS_MAP_KEY is loaded from .env; it is never logged or committed.
 """
 
 from __future__ import annotations
@@ -35,7 +35,6 @@ from src.harmonize import (
     validate_firms_columns,
 )
 
-# Proje kökündeki .env — anahtar yalnızca ortam değişkeninde tutulur
 ROOT = Path(__file__).resolve().parent
 load_dotenv(ROOT / ".env")
 
@@ -47,18 +46,18 @@ st.set_page_config(
 
 
 def get_firms_map_key() -> str:
-    """FIRMS_MAP_KEY'i ortamdan okur (değer loglanmaz)."""
+    """Read FIRMS_MAP_KEY from the environment (value is never logged)."""
     return (os.getenv("FIRMS_MAP_KEY") or "").strip()
 
 
 def build_map(df: pd.DataFrame) -> folium.Map:
-    """Kategori renkleriyle Folium haritası oluşturur."""
+    """Build a Folium map colored by harmonization category."""
     center_lat = float(df["latitude"].mean())
     center_lon = float(df["longitude"].mean())
     fmap = folium.Map(
         location=[center_lat, center_lon],
         zoom_start=7,
-        tiles="CartoDB positron",
+        tiles="CartoDB dark_matter",
     )
 
     for category, color in CATEGORY_COLORS.items():
@@ -93,7 +92,7 @@ def build_map(df: pd.DataFrame) -> folium.Map:
 
 
 def build_activity_chart(ts: pd.DataFrame, freq_label: str) -> go.Figure:
-    """Matched / MODIS-only / VIIRS-only çizgili aktivite grafiği."""
+    """Line chart of Matched / MODIS-only / VIIRS-only activity."""
     fig = go.Figure()
     for col, color in CATEGORY_COLORS.items():
         fig.add_trace(
@@ -107,35 +106,36 @@ def build_activity_chart(ts: pd.DataFrame, freq_label: str) -> go.Figure:
             )
         )
     fig.update_layout(
-        title=f"Yangın Aktivitesi ({freq_label})",
-        xaxis_title="Dönem",
-        yaxis_title="Hot spot sayısı",
-        legend_title="Kategori",
+        title=f"Fire Activity ({freq_label})",
+        xaxis_title="Period",
+        yaxis_title="Hot spot count",
+        legend_title="Category",
         hovermode="x unified",
         margin=dict(l=40, r=20, t=50, b=40),
         height=380,
-        template="plotly_white",
+        template="plotly_dark",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
     )
     return fig
 
 
 def render_sidebar() -> dict:
-    """Kenar çubuğu: bölge, sensör, gün — MAP_KEY yok (.env'den okunur)."""
+    """Sidebar: region, sensors, days — MAP_KEY comes from .env."""
     with st.sidebar:
-        st.header("FIRMS Ayarları")
+        st.header("FIRMS Settings")
 
-        # Form dışında: anında UI değişimi (Hazır ↔ Manuel)
-        st.subheader("Bölge")
+        st.subheader("Region")
         region_mode = st.radio(
-            "Bölge seçimi",
-            options=("Hazır bölge", "Manuel bbox"),
+            "Region mode",
+            options=("Preset region", "Manual bbox"),
             horizontal=True,
         )
 
         with st.form("firms_fetch_form", clear_on_submit=False):
-            if region_mode == "Hazır bölge":
+            if region_mode == "Preset region":
                 region_name = st.selectbox(
-                    "Hazır bölgeler",
+                    "Preset regions",
                     options=list(PRESET_REGIONS.keys()),
                     index=0,
                 )
@@ -144,7 +144,7 @@ def render_sidebar() -> dict:
                     f"bbox: {min_lon}, {min_lat}, {max_lon}, {max_lat}"
                 )
             else:
-                region_name = "Manuel"
+                region_name = "Manual"
                 c1, c2 = st.columns(2)
                 with c1:
                     min_lon = st.number_input("min_lon", value=26.0, format="%.4f")
@@ -154,29 +154,29 @@ def render_sidebar() -> dict:
                     max_lat = st.number_input("max_lat", value=40.0, format="%.4f")
 
             sensors = st.multiselect(
-                "Sensörler",
+                "Sensors",
                 options=list(AVAILABLE_SENSORS),
                 default=list(AVAILABLE_SENSORS),
-                help="Birden fazla sensör seçilebilir; sonuçlar birleştirilir.",
+                help="Select one or more sensors; results are combined.",
             )
 
-            days = st.slider("Gün sayısı", min_value=1, max_value=10, value=3)
+            days = st.slider("Number of days", min_value=1, max_value=10, value=3)
 
             fetch_clicked = st.form_submit_button(
-                "Veriyi Getir",
+                "Fetch Data",
                 type="primary",
                 use_container_width=True,
             )
 
         freq_choice = st.radio(
-            "Takvim frekansı",
-            options=("Günlük", "Haftalık"),
+            "Calendar frequency",
+            options=("Daily", "Weekly"),
             horizontal=True,
         )
 
         st.divider()
         st.caption(
-            "Kaynak: [NASA FIRMS](https://firms.modaps.eosdis.nasa.gov/) · "
+            "Source: [NASA FIRMS](https://firms.modaps.eosdis.nasa.gov/) · "
             "Space Apps 2026 – Hot Spot Harmonization"
         )
 
@@ -197,28 +197,29 @@ def main() -> None:
     st.title("Unified Fire Activity Calendar")
     st.markdown(
         """
-        NASA FIRMS **MODIS** ve **VIIRS** sıcak noktalarını canlı olarak çeker;
-        **1 km** mesafe ve **±6 saat** penceresinde birleştirir.
-        Eşleşenler *Matched (High Confidence)*; diğerleri *MODIS-only* /
-        *VIIRS-only* olarak haritada ve takvimde gösterilir.
+        Pulls live NASA FIRMS **MODIS** and **VIIRS** hot spots and merges
+        detections within **1 km** and **±6 hours**. Matches are labeled
+        *Matched (High Confidence)*; the rest appear as *MODIS-only* /
+        *VIIRS-only* on the map and calendar.
         """
     )
 
     map_key = get_firms_map_key()
     if not map_key:
         st.warning(
-            "`.env` dosyasına `FIRMS_MAP_KEY` ekleyin. "
-            "Örnek: projede `.env.example` dosyasına bakın."
+            "Add `FIRMS_MAP_KEY` to your `.env` file. "
+            "See `.env.example` in the project root."
         )
-        with st.expander(".env nasıl ayarlanır?"):
+        with st.expander("How to set up .env"):
             st.markdown(
                 """
-                1. [FIRMS MAP Key](https://firms.modaps.eosdis.nasa.gov/api/key/) alın.
-                2. Proje klasöründe `.env` oluşturun:
+                1. Get a free key from
+                   [FIRMS MAP Key](https://firms.modaps.eosdis.nasa.gov/api/key/).
+                2. Create a `.env` file in the project folder:
                 ```
-                FIRMS_MAP_KEY=senin_keyin_buraya
+                FIRMS_MAP_KEY=your_key_here
                 ```
-                3. Uygulamayı yeniden başlatın. `.env` Git'e eklenmez.
+                3. Restart the app. `.env` is gitignored and never committed.
                 """
             )
         return
@@ -231,12 +232,11 @@ def main() -> None:
 
     if controls["fetch_clicked"]:
         if not controls["sensors"]:
-            st.error("En az bir sensör seçin.")
+            st.error("Select at least one sensor.")
             st.session_state.harmonized = None
         else:
-            with st.spinner("FIRMS API'den veri getiriliyor…"):
+            with st.spinner("Fetching data from FIRMS…"):
                 try:
-                    # map_key yalnızca bu çağrıya verilir; loglanmaz / state'e yazılmaz
                     raw = fetch_firms_area(
                         map_key=map_key,
                         sensors=controls["sensors"],
@@ -250,18 +250,18 @@ def main() -> None:
                     st.error(str(exc))
                     st.session_state.harmonized = None
                     return
-                except Exception:  # noqa: BLE001 — anahtar sızıntısını önle
+                except Exception:  # noqa: BLE001 — avoid leaking the key
                     st.error(
-                        "Beklenmeyen bir hata oluştu. Bağlantınızı ve "
-                        "parametreleri kontrol edip yeniden deneyin."
+                        "An unexpected error occurred. Check your connection "
+                        "and parameters, then try again."
                     )
                     st.session_state.harmonized = None
                     return
 
             if raw.empty:
                 st.warning(
-                    "Seçilen bölge, sensörler ve gün aralığında hot spot bulunamadı. "
-                    "Daha geniş bir bbox veya daha fazla gün deneyin."
+                    "No hot spots found for this region, sensors, and day range. "
+                    "Try a wider bbox or more days."
                 )
                 st.session_state.harmonized = None
                 return
@@ -269,19 +269,19 @@ def main() -> None:
             missing = validate_firms_columns(raw)
             if missing:
                 st.error(
-                    "FIRMS yanıtında eksik sütunlar: "
+                    "FIRMS response is missing columns: "
                     + ", ".join(missing)
                 )
                 st.session_state.harmonized = None
                 return
 
-            with st.spinner("Hot spotlar harmonize ediliyor…"):
+            with st.spinner("Harmonizing hot spots…"):
                 harmonized = harmonize_hotspots(raw)
 
             if harmonized.empty:
                 st.warning(
-                    "Geçerli MODIS/VIIRS satırı çıkarılamadı. "
-                    "Yanıttaki satellite / instrument alanlarını kontrol edin."
+                    "No valid MODIS/VIIRS rows could be parsed. "
+                    "Check the satellite / instrument fields in the response."
                 )
                 st.session_state.harmonized = None
                 return
@@ -303,24 +303,24 @@ def main() -> None:
     harmonized = st.session_state.harmonized
     if harmonized is None:
         st.info(
-            "Bölge ve sensörleri seçip **Veriyi Getir**’e basın. "
-            "API anahtarı `.env` içindeki `FIRMS_MAP_KEY` ile yüklenir."
+            "Choose a region and sensors, then press **Fetch Data**. "
+            "The API key is loaded from `FIRMS_MAP_KEY` in `.env`."
         )
         return
 
     meta = st.session_state.last_meta or {}
     if meta:
         st.caption(
-            f"Bölge: **{meta.get('region', '—')}** · "
-            f"Sensörler: {', '.join(meta.get('sensors', []))} · "
-            f"Son {meta.get('days', '—')} gün · "
-            f"Ham satır: {meta.get('raw_rows', '—')}"
+            f"Region: **{meta.get('region', '—')}** · "
+            f"Sensors: {', '.join(meta.get('sensors', []))} · "
+            f"Last {meta.get('days', '—')} days · "
+            f"Raw rows: {meta.get('raw_rows', '—')}"
         )
 
     min_d = harmonized["acq_datetime"].min().date()
     max_d = harmonized["acq_datetime"].max().date()
     date_range = st.date_input(
-        "Tarih aralığı",
+        "Date range",
         value=(min_d, max_d),
         min_value=min_d,
         max_value=max_d,
@@ -336,13 +336,13 @@ def main() -> None:
     )
     filtered = harmonized.loc[mask].copy()
     if filtered.empty:
-        st.warning("Seçilen tarih aralığında nokta yok.")
+        st.warning("No points in the selected date range.")
         return
 
     stats = summarize_categories(filtered)
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Toplam", stats["total"])
+    c1.metric("Total", stats["total"])
     c2.metric("Matched", stats["matched"])
     c3.metric("MODIS-only", stats["modis_only"])
     c4.metric("VIIRS-only", stats["viirs_only"])
@@ -352,18 +352,18 @@ def main() -> None:
     left, right = st.columns((1.15, 1.0), gap="large")
 
     with left:
-        st.subheader("Harmonize Harita")
+        st.subheader("Harmonized Map")
         st.caption(
-            "Yeşil = Matched (High Confidence) · "
-            "Turuncu = MODIS-only · Mavi = VIIRS-only"
+            "Green = Matched (High Confidence) · "
+            "Orange = MODIS-only · Blue = VIIRS-only"
         )
         fmap = build_map(filtered)
         st_folium(fmap, width=None, height=480, returned_objects=[])
 
     with right:
-        st.subheader("Yangın Aktivitesi Takvimi")
+        st.subheader("Fire Activity Calendar")
         freq_choice = controls["freq_choice"]
-        freq = "D" if freq_choice == "Günlük" else "W-MON"
+        freq = "D" if freq_choice == "Daily" else "W-MON"
         ts = activity_timeseries(
             filtered,
             freq=freq,
@@ -371,12 +371,12 @@ def main() -> None:
             end=pd.Timestamp(end_date),
         )
         if ts.empty:
-            st.info("Grafik için yeterli veri yok.")
+            st.info("Not enough data for the chart.")
         else:
             fig = build_activity_chart(ts, freq_choice)
             st.plotly_chart(fig, use_container_width=True)
 
-    with st.expander("Harmonize edilmiş tablo", expanded=False):
+    with st.expander("Harmonized table", expanded=False):
         show_cols = [
             c
             for c in (
@@ -395,7 +395,7 @@ def main() -> None:
         st.dataframe(display, use_container_width=True, hide_index=True)
         csv_bytes = display.to_csv(index=False).encode("utf-8")
         st.download_button(
-            "CSV indir",
+            "Download CSV",
             data=csv_bytes,
             file_name="harmonized_hotspots.csv",
             mime="text/csv",
