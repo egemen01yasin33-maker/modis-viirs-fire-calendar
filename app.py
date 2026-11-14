@@ -107,35 +107,62 @@ def _is_wide_bbox(
 ) -> bool:
     """True for near-global boxes where tile maps wrap / duplicate continents."""
     if bbox is None:
-        return False
+        return True
     min_lon, min_lat, max_lon, max_lat = bbox
     return (max_lon - min_lon) >= 120 or (max_lat - min_lat) >= 100
 
 
-MAX_MAP_POINTS = 450
+MAX_MAP_POINTS_GLOBAL = 12_000
+MAX_MAP_POINTS_REGIONAL = 25_000
 MAX_CHART_ANOMALIES = 15
 MAX_CHART_POINTS = 180
 # Skip expensive MODIS↔VIIRS matching above this map-sample size
 MATCH_ROW_LIMIT = 8_000
 
 
-def _sample_for_map(df: pd.DataFrame, limit: int = MAX_MAP_POINTS) -> pd.DataFrame:
-    """Keep the map responsive: prefer Matched points, then sample the rest."""
+def _map_point_limit(bbox: tuple[float, float, float, float] | None) -> int:
+    return MAX_MAP_POINTS_GLOBAL if _is_wide_bbox(bbox) else MAX_MAP_POINTS_REGIONAL
+
+
+def _sample_for_map(
+    df: pd.DataFrame,
+    limit: int = MAX_MAP_POINTS_GLOBAL,
+) -> pd.DataFrame:
+    """
+    Keep the map responsive while preserving geography.
+
+    Random category sampling erased sparse regions (e.g. Turkey) on Global
+    views. Grid-binning keeps at least one point per cell before filling.
+    """
     if len(df) <= limit:
         return df
-    matched = df[df["category"] == MATCHED]
-    others = df[df["category"] != MATCHED]
-    keep_matched = min(len(matched), max(limit // 3, 250))
-    keep_others = limit - keep_matched
-    parts = []
-    if keep_matched and not matched.empty:
-        parts.append(matched.sample(n=keep_matched, random_state=42))
-    if keep_others and not others.empty:
-        n = min(keep_others, len(others))
-        parts.append(others.sample(n=n, random_state=42))
-    if not parts:
-        return df.head(limit)
-    return pd.concat(parts, ignore_index=True)
+    work = df.copy()
+    # Adaptive cell: finer when the frame is already regional
+    lon_span = float(work["longitude"].max() - work["longitude"].min()) + 1e-6
+    lat_span = float(work["latitude"].max() - work["latitude"].min()) + 1e-6
+    area = lon_span * lat_span
+    cell = max(0.15, min((area / max(limit, 1)) ** 0.5, 1.5))
+    work["_gx"] = (work["longitude"] / cell).floordiv(1).astype(int)
+    work["_gy"] = (work["latitude"] / cell).floordiv(1).astype(int)
+    # Prefer Matched, then stable hash-like order within cell
+    work["_pref"] = (work["category"] == MATCHED).astype(int)
+    work = work.sort_values(
+        ["_gx", "_gy", "_pref", "latitude", "longitude"],
+        ascending=[True, True, False, True, True],
+    )
+    spaced = work.groupby(["_gx", "_gy"], sort=False, as_index=False).head(1)
+    if len(spaced) >= limit:
+        out = spaced.sample(n=limit, random_state=42)
+    else:
+        leftover = work.loc[~work.index.isin(spaced.index)]
+        need = limit - len(spaced)
+        extra = (
+            leftover.sample(n=min(need, len(leftover)), random_state=42)
+            if need and not leftover.empty
+            else leftover.iloc[0:0]
+        )
+        out = pd.concat([spaced, extra], ignore_index=True)
+    return out.drop(columns=["_gx", "_gy", "_pref"], errors="ignore")
 
 
 def build_map_figure(
@@ -148,7 +175,7 @@ def build_map_figure(
     Wide / Global views use scatter_geo (single world). Regional views use
     OpenStreetMap tiles with explicit bounds.
     """
-    plot_df = _sample_for_map(df)
+    plot_df = _sample_for_map(df, limit=_map_point_limit(bbox))
     color_map = {k: v for k, v in CATEGORY_COLORS.items()}
     cat_order = list(CATEGORY_COLORS.keys())
 
@@ -501,6 +528,64 @@ def _downsample_chart_daily(daily: pd.DataFrame, max_points: int = MAX_CHART_POI
     return out
 
 
+def _trim_map_columns(harmonized: pd.DataFrame) -> pd.DataFrame:
+    keep = [
+        c
+        for c in (
+            "latitude",
+            "longitude",
+            "acq_datetime",
+            "sensor",
+            "category",
+            "confidence",
+            "satellite",
+        )
+        if c in harmonized.columns
+    ]
+    if keep and not harmonized.empty:
+        return harmonized[keep].copy()
+    return harmonized
+
+
+@st.cache_data(show_spinner=False, max_entries=16, ttl=3600)
+def load_map_slice(
+    folder_str: str,
+    mtimes_key: tuple,
+    min_lon: float,
+    min_lat: float,
+    max_lon: float,
+    max_lat: float,
+    start_iso: str,
+    end_iso: str,
+    known_total: int = 0,
+) -> dict:
+    """
+    Geographic grid sample of fire points for the map.
+
+    Call with the *focus* date window (not the full sidebar range) so
+    narrowing the slider reloads real fires for those days — not a thin
+    filter of a year-wide random sample.
+    """
+    folder = Path(folder_str)
+    raw, names, stats = load_filtered_csvs(
+        folder,
+        min_lon=min_lon,
+        min_lat=min_lat,
+        max_lon=max_lon,
+        max_lat=max_lat,
+        start=start_iso,
+        end=end_iso,
+        known_total=known_total or None,
+    )
+    harmonized = _trim_map_columns(_classify_map_points(raw))
+    return {
+        "harmonized": harmonized,
+        "files": names,
+        "stats": stats,
+        "mtimes_key": mtimes_key,
+    }
+
+
 @st.cache_data(show_spinner=False, max_entries=8, ttl=3600)
 def load_archive_slice(
     folder_str: str,
@@ -527,38 +612,22 @@ def load_archive_slice(
         start=start_iso,
         end=end_iso,
     )
-    raw, names, stats = load_filtered_csvs(
-        folder,
-        min_lon=min_lon,
-        min_lat=min_lat,
-        max_lon=max_lon,
-        max_lat=max_lat,
-        start=start_iso,
-        end=end_iso,
-        known_total=int(daily_stats.get("total_count") or 0),
+    map_payload = load_map_slice(
+        folder_str,
+        mtimes_key,
+        min_lon,
+        min_lat,
+        max_lon,
+        max_lat,
+        start_iso,
+        end_iso,
+        int(daily_stats.get("total_count") or 0),
     )
-    harmonized = _classify_map_points(raw)
-    # Keep only columns the UI needs (smaller session / cache payload)
-    keep = [
-        c
-        for c in (
-            "latitude",
-            "longitude",
-            "acq_datetime",
-            "sensor",
-            "category",
-            "confidence",
-            "satellite",
-        )
-        if c in harmonized.columns
-    ]
-    if keep and not harmonized.empty:
-        harmonized = harmonized[keep].copy()
-    stats = {**stats, **daily_stats}
+    stats = {**(map_payload.get("stats") or {}), **daily_stats}
     return {
-        "raw_rows": int(daily_stats.get("total_count") or len(raw)),
-        "files": names,
-        "harmonized": harmonized,
+        "raw_rows": int(daily_stats.get("total_count") or 0),
+        "files": map_payload.get("files", []),
+        "harmonized": map_payload["harmonized"],
         "daily": daily,
         "stats": stats,
         "mtimes_key": mtimes_key,
@@ -837,17 +906,6 @@ def render_results(controls: dict) -> None:
     focus_start, focus_end = _coerce_focus_dates(start, end, raw_focus)
     st.session_state.chart_focus = (focus_start, focus_end)
 
-    focus_mask = (
-        (harmonized["acq_datetime"] >= pd.Timestamp(focus_start))
-        & (
-            harmonized["acq_datetime"]
-            < pd.Timestamp(focus_end) + pd.Timedelta(days=1)
-        )
-    )
-    focused = harmonized.loc[focus_mask].copy()
-    if focused.empty and not harmonized.empty:
-        focused = harmonized
-
     # Full-range exact daily series from DuckDB (any Global / multi-year span)
     daily_series = st.session_state.get("daily_series")
     if isinstance(daily_series, pd.DataFrame) and not daily_series.empty:
@@ -867,14 +925,77 @@ def render_results(controls: dict) -> None:
         daily_focus["threshold"] = thr
         daily_focus["is_anomaly"] = (daily_focus["total"] > thr) & (mean_total > 0)
     else:
+        daily_focus = pd.DataFrame()
+
+    # Map points for the *focus* window (not a thin cut of a year-wide sample).
+    # That was wiping Turkey / sparse regions when the slider narrowed Global.
+    focused = harmonized
+    if bbox is not None and isinstance(bbox, (tuple, list)) and len(bbox) == 4:
+        min_lon, min_lat, max_lon, max_lat = (float(x) for x in bbox)
+        focus_total = (
+            int(daily_focus["total"].sum())
+            if not daily_focus.empty and "total" in daily_focus.columns
+            else 0
+        )
+        try:
+            map_payload = load_map_slice(
+                str(DATA_PATH),
+                _archive_mtimes_key(DATA_PATH),
+                min_lon,
+                min_lat,
+                max_lon,
+                max_lat,
+                focus_start.isoformat(),
+                focus_end.isoformat(),
+                focus_total,
+            )
+            if map_payload["harmonized"] is not None:
+                focused = map_payload["harmonized"]
+                st.session_state._focus_map_stats = map_payload.get("stats") or {}
+        except Exception:  # noqa: BLE001
+            # Fall back to in-memory filter of the sidebar sample
+            if (
+                harmonized is not None
+                and not harmonized.empty
+                and "acq_datetime" in harmonized.columns
+            ):
+                focus_mask = (
+                    (harmonized["acq_datetime"] >= pd.Timestamp(focus_start))
+                    & (
+                        harmonized["acq_datetime"]
+                        < pd.Timestamp(focus_end) + pd.Timedelta(days=1)
+                    )
+                )
+                focused = harmonized.loc[focus_mask].copy()
+                if focused.empty:
+                    focused = harmonized
+    elif (
+        harmonized is not None
+        and not harmonized.empty
+        and "acq_datetime" in harmonized.columns
+    ):
+        focus_mask = (
+            (harmonized["acq_datetime"] >= pd.Timestamp(focus_start))
+            & (
+                harmonized["acq_datetime"]
+                < pd.Timestamp(focus_end) + pd.Timedelta(days=1)
+            )
+        )
+        focused = harmonized.loc[focus_mask].copy()
+        if focused.empty:
+            focused = harmonized
+
+    if daily_focus.empty:
         daily_focus = daily_hotspot_counts(
-            focused,
+            focused if focused is not None else pd.DataFrame(),
             start=pd.Timestamp(focus_start),
             end=pd.Timestamp(focus_end),
         )
 
     anomalies = count_anomalies(daily_focus)
-    map_stats = summarize_categories(focused)
+    map_stats = summarize_categories(
+        focused if focused is not None else pd.DataFrame()
+    )
     exact_total = (
         int(daily_focus["total"].sum())
         if not daily_focus.empty and "total" in daily_focus.columns
@@ -925,7 +1046,18 @@ def render_results(controls: dict) -> None:
     # —— Map (full width, top) ——
     st.subheader("Map")
     st.caption("Matched · MODIS only · VIIRS only")
-    map_fig = build_map_figure(focused, bbox=bbox)
+    focus_map_stats = st.session_state.get("_focus_map_stats") or {}
+    map_n = 0 if focused is None else int(len(focused))
+    scanned_n = int(focus_map_stats.get("rows_scanned") or exact_total or map_n)
+    if scanned_n > map_n > 0:
+        st.caption(
+            f"Showing {map_n:,} mapped points of {scanned_n:,} fires in focus "
+            f"({focus_start} → {focus_end}). Chart totals stay exact."
+        )
+    map_fig = build_map_figure(
+        focused if focused is not None else pd.DataFrame(),
+        bbox=bbox,
+    )
     map_fig.update_layout(height=480)
     st.plotly_chart(
         map_fig,
@@ -1311,6 +1443,7 @@ def main() -> None:
                 if uploads:
                     save_uploaded_csvs(DATA_PATH, uploads)
                     load_archive_slice.clear()
+                    load_map_slice.clear()
                     st.rerun()
             return
 

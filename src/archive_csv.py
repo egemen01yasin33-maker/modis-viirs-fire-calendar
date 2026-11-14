@@ -24,8 +24,9 @@ DATA_DIRNAME = "data"
 CACHE_DIRNAME = "_cache"
 DB_FILENAME = "fires.duckdb"
 CHUNK_SIZE = 250_000
-# Map sample size — charts use full-range SQL aggregates instead
-MAX_FILTERED_ROWS = 20_000
+# Map sample size — charts use full-range SQL aggregates instead.
+# Raised so sparse regions (e.g. Turkey in winter) survive Global samples.
+MAX_FILTERED_ROWS = 50_000
 # Tiny fixtures kept in data/ for unit tests — skip in Archive mode inventory
 SKIP_FILENAMES = frozenset({"sample_firms.csv"})
 # Columns needed for harmonization + map (keep the query narrow/fast)
@@ -425,6 +426,36 @@ def load_filtered_csvs(
         )
 
 
+def _map_sample_grid(
+    min_lon: float,
+    min_lat: float,
+    max_lon: float,
+    max_lat: float,
+    total_n: int,
+    max_rows: int,
+) -> tuple[float, int]:
+    """
+    Return (cell_deg, per_cell) for spatial downsampling.
+
+    Fine cells + several points per cell keep sparse countries visible on
+    Global maps while still capping Plotly/payload size.
+    """
+    lon_span = max(float(max_lon) - float(min_lon), 1e-3)
+    lat_span = max(float(max_lat) - float(min_lat), 1e-3)
+    if lon_span >= 100 or lat_span >= 80:
+        cell = 0.5
+    elif lon_span >= 25 or lat_span >= 20:
+        cell = 0.25
+    else:
+        cell = 0.1
+    # Rough cell count for this bbox; use it to spend the row budget
+    n_cells = max((lon_span / cell) * (lat_span / cell), 1.0)
+    # Assume fires occupy a fraction of cells; spend budget across them
+    occupied_guess = max(min(n_cells * 0.35, float(total_n)), 1.0)
+    per_cell = int(max(1, min(12, round(max_rows / occupied_guess) + 1)))
+    return float(cell), int(per_cell)
+
+
 def _load_filtered_duckdb(
     folder: Path,
     files: list[Path],
@@ -442,19 +473,25 @@ def _load_filtered_duckdb(
 
     path, rebuilt = ensure_hotspots_db(folder)
     con = duckdb.connect(path.as_posix(), read_only=True)
+    select_sql = """
+        latitude, longitude,
+        CAST(acq_date AS VARCHAR) AS acq_date,
+        acq_time, satellite, instrument, confidence, archive_file
+    """
+    where_sql = """
+        acq_date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
+        AND longitude BETWEEN ? AND ?
+        AND latitude BETWEEN ? AND ?
+    """
+    where_params = [start_s, end_s, min_lon, max_lon, min_lat, max_lat]
     try:
         total_n = (
             int(known_total)
             if known_total is not None
             else int(
                 con.execute(
-                    """
-                    SELECT count(*) FROM hotspots
-                    WHERE acq_date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
-                      AND longitude BETWEEN ? AND ?
-                      AND latitude BETWEEN ? AND ?
-                    """,
-                    [start_s, end_s, min_lon, max_lon, min_lat, max_lat],
+                    f"SELECT count(*) FROM hotspots WHERE {where_sql}",
+                    where_params,
                 ).fetchone()[0]
             )
         )
@@ -462,58 +499,76 @@ def _load_filtered_duckdb(
             df = pd.DataFrame()
         elif total_n <= max_rows:
             df = con.execute(
-                """
-                SELECT
-                  latitude, longitude,
-                  CAST(acq_date AS VARCHAR) AS acq_date,
-                  acq_time, satellite, instrument, confidence, archive_file
+                f"""
+                SELECT {select_sql}
                 FROM hotspots
-                WHERE acq_date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
-                  AND longitude BETWEEN ? AND ?
-                  AND latitude BETWEEN ? AND ?
+                WHERE {where_sql}
                 """,
-                [start_s, end_s, min_lon, max_lon, min_lat, max_lat],
+                where_params,
             ).df()
-        else:
-            # Hash filter + LIMIT is much faster than full reservoir on 100M+ rows
+        elif total_n <= max_rows * 4:
+            # Moderate oversize (e.g. a few Global days): proportional hash
+            # sample so sparse regions keep a fair share of the budget.
+            modulus = 10_000
+            threshold = max(1, int(modulus * (max_rows / total_n)) + 50)
             df = con.execute(
-                """
-                SELECT
-                  latitude, longitude,
-                  CAST(acq_date AS VARCHAR) AS acq_date,
-                  acq_time, satellite, instrument, confidence, archive_file
+                f"""
+                SELECT {select_sql}
                 FROM hotspots
-                WHERE acq_date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
-                  AND longitude BETWEEN ? AND ?
-                  AND latitude BETWEEN ? AND ?
-                  AND (hash(latitude, longitude, acq_date) % 50) = 0
+                WHERE {where_sql}
+                  AND (abs(hash(latitude, longitude, acq_time)) % ?) < ?
+                ORDER BY hash(latitude * 1000, longitude * 1000)
                 LIMIT ?
                 """,
-                [start_s, end_s, min_lon, max_lon, min_lat, max_lat, max_rows],
+                [*where_params, modulus, threshold, max_rows],
             ).df()
-            if len(df) < min(max_rows, 1000):
-                # Sparse region — fall back to plain LIMIT
+            if len(df) < min(max_rows // 5, 2_000):
                 df = con.execute(
-                    """
-                    SELECT
-                      latitude, longitude,
-                      CAST(acq_date AS VARCHAR) AS acq_date,
-                      acq_time, satellite, instrument, confidence, archive_file
+                    f"""
+                    SELECT {select_sql}
                     FROM hotspots
-                    WHERE acq_date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
-                      AND longitude BETWEEN ? AND ?
-                      AND latitude BETWEEN ? AND ?
+                    WHERE {where_sql}
                     LIMIT ?
                     """,
-                    [
-                        start_s,
-                        end_s,
-                        min_lon,
-                        max_lon,
-                        min_lat,
-                        max_lat,
-                        max_rows,
-                    ],
+                    [*where_params, max_rows],
+                ).df()
+        else:
+            # Huge windows: fine spatial grid + several points per cell,
+            # shuffled before LIMIT so west-sorted storage does not bias.
+            cell, per_cell = _map_sample_grid(
+                min_lon, min_lat, max_lon, max_lat, total_n, max_rows
+            )
+            df = con.execute(
+                f"""
+                SELECT {select_sql}
+                FROM (
+                  SELECT
+                    latitude, longitude, acq_date, acq_time, satellite,
+                    instrument, confidence, archive_file,
+                    ROW_NUMBER() OVER (
+                      PARTITION BY
+                        CAST(floor(latitude / ?) AS INTEGER),
+                        CAST(floor(longitude / ?) AS INTEGER)
+                      ORDER BY hash(acq_time, satellite, latitude)
+                    ) AS rn
+                  FROM hotspots
+                  WHERE {where_sql}
+                ) AS gridded
+                WHERE rn <= ?
+                ORDER BY hash(latitude * 1000, longitude * 1000)
+                LIMIT ?
+                """,
+                [cell, cell, *where_params, per_cell, max_rows],
+            ).df()
+            if len(df) < min(max_rows // 5, 2_000):
+                df = con.execute(
+                    f"""
+                    SELECT {select_sql}
+                    FROM hotspots
+                    WHERE {where_sql}
+                    LIMIT ?
+                    """,
+                    [*where_params, max_rows],
                 ).df()
     finally:
         con.close()
