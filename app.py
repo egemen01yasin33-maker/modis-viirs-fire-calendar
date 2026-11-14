@@ -34,6 +34,7 @@ from src.archive_csv import (
     filter_by_dates,
     list_csv_files,
     load_and_merge_csvs,
+    save_uploaded_csvs,
 )
 from src.firms_api import (
     AVAILABLE_SENSORS,
@@ -801,15 +802,35 @@ def main() -> None:
     archive_banner = None
 
     if source_mode == "Archive CSV":
+        st.markdown(
+            f"**CSV folder:** `{DATA_PATH}` — drop files below or copy them "
+            f"into this `data/` directory."
+        )
+        uploads = st.file_uploader(
+            "Upload FIRMS Archive CSV files",
+            type=["csv"],
+            accept_multiple_files=True,
+            help=(
+                "Required columns: latitude, longitude, acq_date, "
+                "acq_time, confidence, satellite"
+            ),
+        )
+        if uploads:
+            saved = save_uploaded_csvs(DATA_PATH, uploads)
+            load_archive_harmonized.clear()
+            st.success(
+                "Saved to data/: " + ", ".join(saved) + ". Reloading…"
+            )
+            st.rerun()
+
         csv_files = list_csv_files(DATA_PATH)
         if not csv_files:
             st.warning(
-                f"`{DATA_PATH.name}/` is empty. "
-                "Download MODIS / VIIRS Archive CSVs from NASA FIRMS and place "
-                f"them in `{DATA_PATH.as_posix()}/`."
+                "No CSV files in data/ yet. "
+                "Use the uploader above, or put files in the data/ folder."
             )
             st.info(
-                "Tip: keep the required columns "
+                "Required columns: "
                 "`latitude, longitude, acq_date, acq_time, confidence, satellite`."
             )
             return

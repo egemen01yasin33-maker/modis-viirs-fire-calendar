@@ -81,6 +81,24 @@ def load_and_merge_csvs(folder: Path) -> tuple[pd.DataFrame, list[str]]:
     return merged, names
 
 
+def save_uploaded_csvs(folder: Path, uploads) -> list[str]:
+    """
+    Save Streamlit UploadedFile objects into folder.
+
+    Returns list of saved filenames. Overwrites same-named files.
+    """
+    folder.mkdir(parents=True, exist_ok=True)
+    saved: list[str] = []
+    for upload in uploads or []:
+        name = Path(getattr(upload, "name", "") or "upload.csv").name
+        if not name.lower().endswith(".csv"):
+            name = f"{name}.csv"
+        dest = folder / name
+        dest.write_bytes(upload.getbuffer())
+        saved.append(name)
+    return saved
+
+
 def filter_by_bbox(
     df: pd.DataFrame,
     min_lon: float,
