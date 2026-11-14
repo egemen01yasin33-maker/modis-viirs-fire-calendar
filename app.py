@@ -102,6 +102,16 @@ def _map_zoom_for_bbox(
     return 7
 
 
+def _is_wide_bbox(
+    bbox: tuple[float, float, float, float] | None,
+) -> bool:
+    """True for near-global boxes where tile maps wrap / duplicate continents."""
+    if bbox is None:
+        return False
+    min_lon, min_lat, max_lon, max_lat = bbox
+    return (max_lon - min_lon) >= 120 or (max_lat - min_lat) >= 100
+
+
 MAX_MAP_POINTS = 450
 MAX_CHART_ANOMALIES = 15
 MAX_CHART_POINTS = 180
@@ -132,46 +142,120 @@ def build_map_figure(
     df: pd.DataFrame,
     bbox: tuple[float, float, float, float] | None = None,
 ) -> go.Figure:
-    """Fast Plotly map on OpenStreetMap (no Folium HTML cost)."""
+    """
+    Map figure without wrapped/duplicated continents.
+
+    Wide / Global views use scatter_geo (single world). Regional views use
+    OpenStreetMap tiles with explicit bounds.
+    """
     plot_df = _sample_for_map(df)
+    color_map = {k: v for k, v in CATEGORY_COLORS.items()}
+    cat_order = list(CATEGORY_COLORS.keys())
+
     if plot_df.empty:
         fig = go.Figure()
         fig.update_layout(
-            map_style="open-street-map",
-            map=dict(center=dict(lat=20, lon=0), zoom=1),
-            height=480,
+            geo=dict(
+                projection_type="natural earth",
+                bgcolor="rgba(0,0,0,0)",
+                showland=True,
+                landcolor="#1a1a1a",
+                showocean=True,
+                oceancolor="#0b1220",
+                showcountries=True,
+                countrycolor="#333333",
+            ),
+            height=520,
             margin=dict(l=0, r=0, t=0, b=0),
+            paper_bgcolor="rgba(0,0,0,0)",
         )
         return fig
 
+    # Normalize longitudes into [-180, 180] to avoid antimeridian artifacts
+    plot_df = plot_df.copy()
+    plot_df["longitude"] = ((plot_df["longitude"] + 180.0) % 360.0) - 180.0
+    plot_df["latitude"] = plot_df["latitude"].clip(-90, 90)
+
     if bbox is not None:
         min_lon, min_lat, max_lon, max_lat = bbox
-        center_lat = (min_lat + max_lat) / 2.0
-        center_lon = (min_lon + max_lon) / 2.0
-        zoom = float(_map_zoom_for_bbox(min_lon, min_lat, max_lon, max_lat))
     else:
-        center_lat = float(plot_df["latitude"].mean())
-        center_lon = float(plot_df["longitude"].mean())
-        zoom = 5.0
+        min_lon = float(plot_df["longitude"].min())
+        max_lon = float(plot_df["longitude"].max())
+        min_lat = float(plot_df["latitude"].min())
+        max_lat = float(plot_df["latitude"].max())
 
-    color_map = {k: v for k, v in CATEGORY_COLORS.items()}
+    # —— Global / very wide: one world, no OSM tile wrap ——
+    if _is_wide_bbox((min_lon, min_lat, max_lon, max_lat)):
+        fig = px.scatter_geo(
+            plot_df,
+            lat="latitude",
+            lon="longitude",
+            color="category",
+            color_discrete_map=color_map,
+            category_orders={"category": cat_order},
+            height=520,
+        )
+        fig.update_traces(marker=dict(size=5, opacity=0.8))
+        fig.update_geos(
+            projection_type="natural earth",
+            showland=True,
+            landcolor="#1c1c1c",
+            showocean=True,
+            oceancolor="#0a1520",
+            showlakes=False,
+            showcountries=True,
+            countrycolor="#3a3a3a",
+            showcoastlines=True,
+            coastlinecolor="#555555",
+            bgcolor="rgba(0,0,0,0)",
+            # Fit to data / bbox without repeating the globe
+            lataxis_range=[max(-85.0, min_lat - 2), min(85.0, max_lat + 2)],
+            lonaxis_range=[max(-180.0, min_lon), min(180.0, max_lon)],
+            visible=True,
+        )
+        fig.update_layout(
+            margin=dict(l=0, r=0, t=0, b=0),
+            legend=dict(orientation="h", yanchor="bottom", y=0.02, x=0.01),
+            paper_bgcolor="rgba(0,0,0,0)",
+            geo_bgcolor="rgba(0,0,0,0)",
+            uirevision="fire-map-geo",
+        )
+        return fig
+
+    # —— Regional: OSM tiles with locked bounds (no horizontal wrap) ——
+    center_lat = (min_lat + max_lat) / 2.0
+    center_lon = (min_lon + max_lon) / 2.0
+    zoom = float(_map_zoom_for_bbox(min_lon, min_lat, max_lon, max_lat))
+    # Pad bounds slightly so points near edges stay visible
+    pad_lon = max((max_lon - min_lon) * 0.05, 0.3)
+    pad_lat = max((max_lat - min_lat) * 0.05, 0.3)
+    west = max(-180.0, min_lon - pad_lon)
+    east = min(180.0, max_lon + pad_lon)
+    south = max(-85.0, min_lat - pad_lat)
+    north = min(85.0, max_lat + pad_lat)
+
     fig = px.scatter_map(
         plot_df,
         lat="latitude",
         lon="longitude",
         color="category",
         color_discrete_map=color_map,
-        category_orders={"category": list(CATEGORY_COLORS.keys())},
+        category_orders={"category": cat_order},
         zoom=zoom,
-        height=480,
+        height=520,
     )
     fig.update_traces(marker=dict(size=7, opacity=0.85))
     fig.update_layout(
         map_style="open-street-map",
-        map=dict(center=dict(lat=center_lat, lon=center_lon), zoom=zoom),
+        map=dict(
+            center=dict(lat=center_lat, lon=center_lon),
+            zoom=zoom,
+            # Explicit bounds stop the repeating-world tile pan
+            bounds=dict(west=west, east=east, south=south, north=north),
+        ),
         margin=dict(l=0, r=0, t=0, b=0),
         legend=dict(orientation="h", yanchor="bottom", y=0.01, x=0.01),
-        uirevision="fire-map",
+        uirevision="fire-map-region",
     )
     return fig
 
