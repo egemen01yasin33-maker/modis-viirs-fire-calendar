@@ -21,6 +21,7 @@ class ArchiveCsvError(Exception):
 
 
 DATA_DIRNAME = "data"
+CACHE_DIRNAME = "_cache"
 CHUNK_SIZE = 250_000
 # Soft cap after bbox+date filter — beyond this, ask the user to narrow scope
 MAX_FILTERED_ROWS = 400_000
@@ -221,6 +222,72 @@ def load_and_merge_csvs(folder: Path) -> tuple[pd.DataFrame, list[str]]:
     return merged, names
 
 
+def cache_dir(folder: Path) -> Path:
+    """Parquet cache directory beside the CSVs (gitignored)."""
+    path = folder / CACHE_DIRNAME
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def ensure_parquet_cache(folder: Path) -> tuple[list[Path], int]:
+    """
+    Build/refresh Parquet siblings for each archive CSV.
+
+    Returns (parquet_paths, number_rebuilt). One-time cost ~tens of seconds
+    for multi-GB dumps; later region/date filters are sub-second.
+    """
+    try:
+        import duckdb
+    except ImportError as exc:  # pragma: no cover
+        raise ArchiveCsvError(
+            "duckdb is required for fast archive queries. "
+            "Install with: pip install duckdb pyarrow"
+        ) from exc
+
+    files = list_archive_csv_files(folder) or list_csv_files(folder)
+    if not files:
+        return [], 0
+
+    out_dir = cache_dir(folder)
+    con = duckdb.connect()
+    rebuilt = 0
+    paths: list[Path] = []
+
+    for csv_path in files:
+        pq_path = out_dir / f"{csv_path.stem}.parquet"
+        needs = (
+            not pq_path.exists()
+            or pq_path.stat().st_mtime_ns < csv_path.stat().st_mtime_ns
+        )
+        if needs:
+            # Validate header before spending time on conversion
+            header = pd.read_csv(csv_path, nrows=0)
+            missing = validate_firms_columns(header)
+            if missing:
+                continue
+            src_name = csv_path.name.replace("'", "''")
+            con.execute(
+                f"""
+                COPY (
+                  SELECT
+                    *,
+                    '{src_name}' AS archive_file
+                  FROM read_csv_auto(
+                    '{csv_path.as_posix()}',
+                    header=true,
+                    sample_size=-1
+                  )
+                ) TO '{pq_path.as_posix()}'
+                  (FORMAT PARQUET, COMPRESSION ZSTD)
+                """
+            )
+            rebuilt += 1
+        if pq_path.exists():
+            paths.append(pq_path)
+
+    return paths, rebuilt
+
+
 def load_filtered_csvs(
     folder: Path,
     min_lon: float,
@@ -234,10 +301,10 @@ def load_filtered_csvs(
     max_rows: int = MAX_FILTERED_ROWS,
 ) -> tuple[pd.DataFrame, list[str], dict]:
     """
-    Stream every CSV under folder, keeping only rows inside bbox + date window.
+    Keep rows inside bbox + date window.
 
-    Returns (filtered_dataframe, filenames_used, stats).
-    ``stats`` includes rows_scanned, rows_kept, truncated (bool).
+    Prefers a Parquet cache queried with DuckDB (~0.3s). Falls back to
+    chunked pandas CSV scans if DuckDB is unavailable.
     """
     files = list_archive_csv_files(folder) or list_csv_files(folder)
     if not files:
@@ -250,6 +317,126 @@ def load_filtered_csvs(
     start_s = pd.Timestamp(start).strftime("%Y-%m-%d")
     end_s = pd.Timestamp(end).strftime("%Y-%m-%d")
 
+    try:
+        return _load_filtered_duckdb(
+            folder,
+            files,
+            min_lon=min_lon,
+            min_lat=min_lat,
+            max_lon=max_lon,
+            max_lat=max_lat,
+            start_s=start_s,
+            end_s=end_s,
+            max_rows=max_rows,
+        )
+    except ArchiveCsvError:
+        raise
+    except Exception:
+        # Fall back to pandas chunk scan (slower but dependency-light)
+        return _load_filtered_pandas(
+            files,
+            min_lon=min_lon,
+            min_lat=min_lat,
+            max_lon=max_lon,
+            max_lat=max_lat,
+            start_s=start_s,
+            end_s=end_s,
+            chunksize=chunksize,
+            max_rows=max_rows,
+        )
+
+
+def _load_filtered_duckdb(
+    folder: Path,
+    files: list[Path],
+    *,
+    min_lon: float,
+    min_lat: float,
+    max_lon: float,
+    max_lat: float,
+    start_s: str,
+    end_s: str,
+    max_rows: int,
+) -> tuple[pd.DataFrame, list[str], dict]:
+    import duckdb
+
+    parquet_paths, rebuilt = ensure_parquet_cache(folder)
+    if not parquet_paths:
+        raise ArchiveCsvError(
+            "Could not prepare archive cache from the CSV files in data/."
+        )
+
+    # Existing cache files may predate archive_file column — rebuild if missing
+    con = duckdb.connect()
+    probe = con.execute(
+        f"DESCRIBE SELECT * FROM read_parquet('{parquet_paths[0].as_posix()}')"
+    ).fetchdf()
+    cols = {str(c).lower() for c in probe["column_name"].tolist()}
+    if "archive_file" not in cols:
+        for p in parquet_paths:
+            p.unlink(missing_ok=True)
+        parquet_paths, rebuilt = ensure_parquet_cache(folder)
+        if not parquet_paths:
+            raise ArchiveCsvError(
+                "Could not prepare archive cache from the CSV files in data/."
+            )
+
+    # Limit early so huge world queries stay bounded
+    df = con.execute(
+        """
+        SELECT
+          latitude, longitude, brightness, scan, track,
+          CAST(acq_date AS VARCHAR) AS acq_date,
+          CAST(acq_time AS VARCHAR) AS acq_time,
+          satellite, instrument, confidence, version,
+          bright_t31, frp, daynight, type,
+          archive_file
+        FROM read_parquet(?, union_by_name=true)
+        WHERE longitude BETWEEN ? AND ?
+          AND latitude BETWEEN ? AND ?
+          AND CAST(acq_date AS VARCHAR) BETWEEN ? AND ?
+        LIMIT ?
+        """,
+        [
+            [p.as_posix() for p in parquet_paths],
+            min_lon,
+            max_lon,
+            min_lat,
+            max_lat,
+            start_s,
+            end_s,
+            max_rows + 1,
+        ],
+    ).df()
+
+    truncated = len(df) > max_rows
+    if truncated:
+        df = df.iloc[:max_rows].copy()
+
+    names = [p.name for p in files]
+    stats = {
+        "rows_scanned": 0,
+        "rows_kept": int(len(df)),
+        "truncated": truncated,
+        "errors": [],
+        "engine": "duckdb",
+        "cache_rebuilt": rebuilt,
+    }
+    return df, names, stats
+
+
+def _load_filtered_pandas(
+    files: list[Path],
+    *,
+    min_lon: float,
+    min_lat: float,
+    max_lon: float,
+    max_lat: float,
+    start_s: str,
+    end_s: str,
+    chunksize: int,
+    max_rows: int,
+) -> tuple[pd.DataFrame, list[str], dict]:
     frames: list[pd.DataFrame] = []
     names: list[str] = []
     errors: list[str] = []
@@ -276,7 +463,6 @@ def load_filtered_csvs(
 
         rows_scanned += scanned
         if kept is None:
-            # header validation failed
             errors.append(f"{path.name}: missing required FIRMS columns")
             continue
 
@@ -301,6 +487,7 @@ def load_filtered_csvs(
             "rows_kept": 0,
             "truncated": False,
             "errors": errors,
+            "engine": "pandas",
         }
         return empty, names, stats
 
@@ -310,6 +497,7 @@ def load_filtered_csvs(
         "rows_kept": int(len(merged)),
         "truncated": truncated,
         "errors": errors,
+        "engine": "pandas",
     }
     return merged, names, stats
 

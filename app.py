@@ -28,8 +28,10 @@ from src.analytics import (
 )
 from src.archive_csv import (
     ArchiveCsvError,
+    cache_dir,
     data_dir,
     describe_csv_files,
+    ensure_parquet_cache,
     list_archive_csv_files,
     load_filtered_csvs,
     peek_archive_date_bounds,
@@ -99,7 +101,7 @@ def _map_zoom_for_bbox(
     return 7
 
 
-MAX_MAP_POINTS = 2_500
+MAX_MAP_POINTS = 1_500
 
 
 def _sample_for_map(df: pd.DataFrame, limit: int = MAX_MAP_POINTS) -> pd.DataFrame:
@@ -108,7 +110,7 @@ def _sample_for_map(df: pd.DataFrame, limit: int = MAX_MAP_POINTS) -> pd.DataFra
         return df
     matched = df[df["category"] == MATCHED]
     others = df[df["category"] != MATCHED]
-    keep_matched = min(len(matched), max(limit // 3, 400))
+    keep_matched = min(len(matched), max(limit // 3, 300))
     keep_others = limit - keep_matched
     parts = []
     if keep_matched and not matched.empty:
@@ -126,6 +128,8 @@ def build_map(
     bbox: tuple[float, float, float, float] | None = None,
 ) -> folium.Map:
     """Folium map with OpenStreetMap tiles (no API key)."""
+    from folium.plugins import MarkerCluster
+
     plot_df = _sample_for_map(df)
     if plot_df.empty:
         center_lat, center_lon, zoom = 20.0, 0.0, 2
@@ -152,8 +156,12 @@ def build_map(
         if subset.empty:
             continue
         full_n = int((df["category"] == category).sum()) if not df.empty else len(subset)
-        layer = folium.FeatureGroup(name=f"{category} ({full_n})")
-        # Vectorized-ish add via itertuples (faster than iterrows)
+        cluster = MarkerCluster(
+            name=f"{category} ({full_n})",
+            show=True,
+            disableClusteringAtZoom=9,
+        )
+        # Compact HTML markers via CircleMarker inside clusters
         for row in subset.itertuples(index=False):
             folium.CircleMarker(
                 location=[row.latitude, row.longitude],
@@ -161,11 +169,10 @@ def build_map(
                 color=color,
                 fill=True,
                 fill_color=color,
-                fill_opacity=0.8,
+                fill_opacity=0.75,
                 weight=1,
-                tooltip=str(category),
-            ).add_to(layer)
-        layer.add_to(fmap)
+            ).add_to(cluster)
+        cluster.add_to(fmap)
 
     folium.LayerControl(collapsed=True).add_to(fmap)
     return fmap
@@ -638,6 +645,20 @@ def run_archive_pipeline(controls: dict) -> str | None:
     mtimes = _archive_mtimes_key(DATA_PATH)
     start_iso = controls["start_date"].isoformat()
     end_iso = controls["end_date"].isoformat()
+
+    # First visit may build a Parquet cache (one-time); later updates are fast
+    cache_path = cache_dir(DATA_PATH)
+    need_prepare = any(
+        (not (cache_path / f"{p.stem}.parquet").exists())
+        or (
+            (cache_path / f"{p.stem}.parquet").stat().st_mtime_ns
+            < p.stat().st_mtime_ns
+        )
+        for p in list_archive_csv_files(DATA_PATH)
+    )
+    if need_prepare:
+        with st.spinner("Preparing archive for fast map updates (one-time)…"):
+            ensure_parquet_cache(DATA_PATH)
 
     with st.spinner("Updating map…"):
         try:
