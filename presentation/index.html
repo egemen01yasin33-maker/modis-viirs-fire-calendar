@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Unified Fire Activity Calendar — NASA Space Apps 2026</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #070b10;
+      --bg-2: #0e151c;
+      --panel: #121a22;
+      --ink: #e8f1f4;
+      --muted: #8aa0ad;
+      --line: #24303a;
+      --teal: #00e5d4;
+      --teal-deep: #14919b;
+      --cyan: #7df9ff;
+      --amber: #fbbf24;
+      --danger: #ff4d6d;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0; height: 100%;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: "IBM Plex Sans", system-ui, sans-serif;
+    }
+    body {
+      background:
+        radial-gradient(1200px 600px at 10% -10%, rgba(0, 229, 212, 0.12), transparent 55%),
+        radial-gradient(900px 500px at 90% 110%, rgba(20, 145, 155, 0.14), transparent 50%),
+        var(--bg);
+    }
+    .deck {
+      height: 100%;
+      display: grid;
+      grid-template-rows: 1fr auto;
+    }
+    .slide {
+      display: none;
+      height: 100%;
+      padding: clamp(1.5rem, 4vw, 3.5rem);
+      max-width: 1180px;
+      margin: 0 auto;
+      width: 100%;
+      align-content: center;
+      animation: in 280ms ease;
+    }
+    .slide.active { display: grid; gap: 1.25rem; }
+    @keyframes in {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: none; }
+    }
+    h1, h2, h3 {
+      font-family: Syne, sans-serif;
+      margin: 0;
+      letter-spacing: -0.02em;
+      line-height: 1.1;
+    }
+    h1 { font-size: clamp(2.2rem, 5.5vw, 4.2rem); font-weight: 800; }
+    h2 { font-size: clamp(1.7rem, 3.8vw, 2.8rem); font-weight: 700; }
+    h3 { font-size: 1.15rem; font-weight: 700; color: var(--cyan); }
+    p, li { color: var(--muted); font-size: clamp(1rem, 1.5vw, 1.2rem); line-height: 1.55; }
+    .lead { color: var(--ink); font-size: clamp(1.1rem, 2vw, 1.4rem); max-width: 48rem; }
+    .kicker {
+      color: var(--teal);
+      text-transform: uppercase;
+      letter-spacing: 0.14em;
+      font-size: 0.78rem;
+      font-weight: 600;
+    }
+    .brand {
+      font-family: Syne, sans-serif;
+      font-weight: 800;
+      font-size: clamp(2.6rem, 7vw, 5rem);
+      background: linear-gradient(120deg, var(--ink) 20%, var(--teal) 70%, var(--cyan));
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+    }
+    .grid {
+      display: grid;
+      gap: 1rem;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 1.1rem 1.2rem;
+    }
+    .stat-val {
+      font-family: Syne, sans-serif;
+      font-size: 2rem;
+      font-weight: 700;
+      color: var(--teal);
+    }
+    .stat-lbl { color: var(--muted); font-size: 0.9rem; margin-top: 0.25rem; }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      border: 1px solid var(--line);
+      background: var(--bg-2);
+      color: var(--cyan);
+      border-radius: 999px;
+      padding: 0.35rem 0.75rem;
+      font-size: 0.85rem;
+      font-weight: 500;
+    }
+    .pills { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+    .rule {
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      gap: 1rem;
+      align-items: center;
+    }
+    .rule .op {
+      font-family: Syne, sans-serif;
+      color: var(--amber);
+      font-size: 1.4rem;
+      font-weight: 700;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.98rem;
+    }
+    th, td {
+      text-align: left;
+      padding: 0.75rem 0.6rem;
+      border-bottom: 1px solid var(--line);
+      vertical-align: top;
+    }
+    th { color: var(--cyan); font-weight: 600; }
+    td { color: var(--muted); }
+    td:first-child { color: var(--ink); font-weight: 600; width: 32%; }
+    .footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      padding: 0.75rem 1.25rem 1rem;
+      border-top: 1px solid var(--line);
+      background: rgba(7, 11, 16, 0.85);
+      backdrop-filter: blur(8px);
+    }
+    .dots { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+    .dot {
+      width: 10px; height: 10px; border-radius: 50%;
+      background: var(--line); border: 0; cursor: pointer; padding: 0;
+    }
+    .dot.on { background: var(--teal); }
+    .nav { display: flex; gap: 0.5rem; }
+    button.ctrl {
+      background: var(--panel);
+      color: var(--ink);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 0.55rem 0.9rem;
+      font: inherit;
+      cursor: pointer;
+    }
+    button.ctrl:hover { border-color: var(--teal); color: var(--teal); }
+    button.ctrl:disabled { opacity: 0.35; cursor: default; }
+    .hint { color: var(--muted); font-size: 0.85rem; }
+    .alert {
+      border: 1px solid rgba(251, 191, 36, 0.45);
+      background: rgba(251, 191, 36, 0.08);
+      color: var(--amber);
+      border-radius: 12px;
+      padding: 0.9rem 1rem;
+      font-weight: 600;
+    }
+    .two {
+      display: grid;
+      grid-template-columns: 1.2fr 1fr;
+      gap: 1.25rem;
+    }
+    @media (max-width: 820px) {
+      .two, .rule { grid-template-columns: 1fr; }
+      .rule .op { display: none; }
+    }
+    ul { margin: 0; padding-left: 1.15rem; }
+    li + li { margin-top: 0.45rem; }
+    .tiny { font-size: 0.85rem; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <div class="deck">
+    <main id="slides">
+
+      <section class="slide active" data-i="0">
+        <div class="kicker">NASA Space Apps Challenge 2026</div>
+        <div class="brand">Unified Fire Activity Calendar</div>
+        <p class="lead">MODIS ve VIIRS yangın noktalarını tek haritada, tek takvimde birleştiren operasyonel panel.</p>
+        <div class="pills">
+          <span class="pill">Hotspot harmonization</span>
+          <span class="pill">FIRMS Archive + NRT</span>
+          <span class="pill">FRP · Quality · Alerts</span>
+        </div>
+        <div class="grid" style="margin-top:1rem">
+          <div class="card"><div class="stat-val">1 km</div><div class="stat-lbl">Eşleşme mesafesi</div></div>
+          <div class="card"><div class="stat-val">±6 saat</div><div class="stat-lbl">Zaman penceresi</div></div>
+          <div class="card"><div class="stat-val">115M+</div><div class="stat-lbl">Arşiv tespiti (indeks)</div></div>
+        </div>
+      </section>
+
+      <section class="slide" data-i="1">
+        <div class="kicker">Problem</div>
+        <h2>Aynı yangın, iki sensör, parçalı gerçek</h2>
+        <div class="two">
+          <div>
+            <p class="lead">MODIS ve VIIRS aynı coğrafyayı farklı çözünürlük, güven ve geçiş saatleriyle görür. Operatörler çift sayım, kaçan eşleşmeler ve “bu hafta ne kadar yoğundu?” sorusuna ortak bir cevap bulamaz.</p>
+            <ul>
+              <li>Çift kayıt / eksik ortak tespit</li>
+              <li>Çok yıllı global arşivler tarayıcıyı dondurur veya seyrek bölgeleri siler</li>
+              <li>Yoğunluk (adet) ile enerji (FRP) aynı ekranda nadiren buluşur</li>
+            </ul>
+          </div>
+          <div class="card">
+            <h3>Kim etkilenir?</h3>
+            <p>Yangın yönetim ekipleri, afet koordinasyonu, araştırmacılar ve açık veri ile çalışan yerel ekipler.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="slide" data-i="2">
+        <div class="kicker">Çözüm</div>
+        <h2>Tek harita · tek takvim · güvenilir aktivite</h2>
+        <p class="lead">NASA FIRMS arşivini (veya canlı NRT) yükler, MODIS↔VIIRS’i uzay-zamanla eşleştirir; aktivite, FRP, kalite ve uyarıları aynı koyu temalı konsolda gösterir.</p>
+        <div class="grid">
+          <div class="card"><h3>Unified map</h3><p>Matched · MODIS-only · VIIRS-only. Global’de Natural Earth (kıta tekrarı yok), bölgede OSM.</p></div>
+          <div class="card"><h3>Exact charts</h3><p>DuckDB ile günlük/aylık toplamlar her zaman tam; harita mekânsal örnekle akıcı kalır.</p></div>
+          <div class="card"><h3>Ops signals</h3><p>FRP, MoM trend, Harmonization Quality, son 7 gün anomali uyarısı.</p></div>
+        </div>
+      </section>
+
+      <section class="slide" data-i="3">
+        <div class="kicker">Harmonization</div>
+        <h2>Eşleşme kuralı (açık ve denetlenebilir)</h2>
+        <div class="rule">
+          <div class="card"><div class="stat-val">≤ 1 km</div><div class="stat-lbl">Haversine mesafe</div></div>
+          <div class="op">AND</div>
+          <div class="card"><div class="stat-val">≤ 6 sa</div><div class="stat-lbl">|Δ acquisition time|</div></div>
+        </div>
+        <p>Her iki koşul da sağlanınca noktalar <strong style="color:var(--teal)">Matched (High Confidence)</strong> olur. Greedy bipartite: her MODIS, zaman penceresindeki en yakın kullanılmamış VIIRS’i alır.</p>
+        <div class="card">
+          <h3>Harmonization Quality</h3>
+          <p>Matched noktaların yüzde kaçında confidence &gt; 80? VIIRS harf kodları: h→100, n→50, l→20.</p>
+        </div>
+      </section>
+
+      <section class="slide" data-i="4">
+        <div class="kicker">Ürün özellikleri</div>
+        <h2>Hakimlerin tıklayabileceği her şey</h2>
+        <table>
+          <thead><tr><th>Özellik</th><th>Ne gösterir?</th></tr></thead>
+          <tbody>
+            <tr><td>FRP analizi</td><td>Toplam / ortalama Fire Radiative Power; hotspot + FRP dual-axis grafik</td></tr>
+            <tr><td>Aylık trend</td><td>Aylık hotspot + FRP ve bir önceki aya göre % değişim</td></tr>
+            <tr><td>Quality score</td><td>Matched &amp; confidence &gt; 80 oranı</td></tr>
+            <tr><td>Elevated alert</td><td>Son 7 günde anomali varsa üst bant uyarısı</td></tr>
+            <tr><td>Bölgeler</td><td>Global, Amazon, Turkey… + yer adı + manuel bbox</td></tr>
+            <tr><td>Compare</td><td>Aynı bölge, iki tarih aralığı yan yana</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="slide" data-i="5">
+        <div class="kicker">Demo kanıtı</div>
+        <h2>Türkiye · 1–15 Ağustos 2025</h2>
+        <p class="tiny">Kaynak: FIRMS arşivi · DuckDB agregasyonu · uygulama smoke test</p>
+        <div class="grid">
+          <div class="card"><div class="stat-val">3.318</div><div class="stat-lbl">Hotspot</div></div>
+          <div class="card"><div class="stat-val">49.405</div><div class="stat-lbl">FRP toplam (MW)</div></div>
+          <div class="card"><div class="stat-val">14,89</div><div class="stat-lbl">FRP ortalama (MW)</div></div>
+          <div class="card"><div class="stat-val">13 Ağu</div><div class="stat-lbl">Yoğun / anomali günü</div></div>
+        </div>
+        <div class="alert">Elevated fire activity detected — son 7 günde anomali bayrağı</div>
+      </section>
+
+      <section class="slide" data-i="6">
+        <div class="kicker">Teknoloji</div>
+        <h2>Ölçeklenebilir ama sade mimari</h2>
+        <div class="grid">
+          <div class="card"><h3>Ingest</h3><p>FIRMS CSV → Parquet cache → DuckDB <code>hotspots</code> (+ FRP)</p></div>
+          <div class="card"><h3>Compute</h3><p>Uzay-zaman eşleşme · günlük/aylık SQL · FRP · anomali (&gt;2× ortalama)</p></div>
+          <div class="card"><h3>UI</h3><p>Streamlit + Plotly · map fragment · slider donmadan odak</p></div>
+        </div>
+        <div class="pills">
+          <span class="pill">Python</span>
+          <span class="pill">DuckDB</span>
+          <span class="pill">Plotly</span>
+          <span class="pill">Streamlit</span>
+          <span class="pill">NASA FIRMS</span>
+        </div>
+      </section>
+
+      <section class="slide" data-i="7">
+        <div class="kicker">Etki</div>
+        <h2>Neden önemli?</h2>
+        <div class="two">
+          <div class="card">
+            <h3>Sahada</h3>
+            <p>İki uydu ürününü elle birleştirmek yerine adet + FRP’yi tek takvimde okuyun.</p>
+          </div>
+          <div class="card">
+            <h3>Analizde</h3>
+            <p>Açık eşik, kalite skoru ve MoM trend; Global çok yıllı sorguda UI kilitlenmez.</p>
+          </div>
+        </div>
+        <p class="lead">Açık NASA FIRMS verisi, belgelenmiş kurallar — denetlenebilir, genişletilebilir, Türkiye alt bölgeleri hazır.</p>
+      </section>
+
+      <section class="slide" data-i="8">
+        <div class="kicker">Sonraki adımlar</div>
+        <h2>Yol haritası</h2>
+        <table>
+          <thead><tr><th>Ufuk</th><th>Plan</th></tr></thead>
+          <tbody>
+            <tr><td>Yakın</td><td>Yanık izi / arazi örtüsü katmanları; nöbetçi için kısa brifing çıktısı</td></tr>
+            <tr><td>Ürün</td><td>Zamanlanmış NRT yenileme; olay odası için paylaşımlı görünüm</td></tr>
+            <tr><td>Bilim</td><td>Bilinen kampanyalarla match oranını doğrulama; confidence eşlemesini ince ayar</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="slide" data-i="9">
+        <div class="kicker">Kapanış</div>
+        <h1>Canlı demoya hazırız</h1>
+        <p class="lead">Uygulamayı açın → Turkey veya Global seçin → odak slider’ını kaydırın → FRP ve aylık trendi birlikte okuyun.</p>
+        <div class="card">
+          <h3>Unified Fire Activity Calendar</h3>
+          <p>NASA Space Apps Challenge 2026 · MODIS &amp; VIIRS hotspot harmonization</p>
+          <p class="tiny">Yerel çalıştırma: <code>streamlit run app.py --server.port 8529</code> · Bu sunum: <code>presentation/</code></p>
+        </div>
+        <div class="pills">
+          <span class="pill">Teşekkürler</span>
+          <span class="pill">Sorular?</span>
+        </div>
+      </section>
+
+    </main>
+
+    <footer class="footer">
+      <div class="dots" id="dots" aria-label="Slayt seçici"></div>
+      <div class="hint">← → veya boşluk · F tam ekran</div>
+      <div class="nav">
+        <button class="ctrl" id="prev" type="button">Önceki</button>
+        <button class="ctrl" id="next" type="button">Sonraki</button>
+      </div>
+    </footer>
+  </div>
+
+  <script>
+    const slides = [...document.querySelectorAll(".slide")];
+    const dots = document.getElementById("dots");
+    let i = 0;
+
+    slides.forEach((_, idx) => {
+      const b = document.createElement("button");
+      b.className = "dot" + (idx === 0 ? " on" : "");
+      b.type = "button";
+      b.setAttribute("aria-label", "Slayt " + (idx + 1));
+      b.addEventListener("click", () => go(idx));
+      dots.appendChild(b);
+    });
+
+    function go(n) {
+      i = Math.max(0, Math.min(slides.length - 1, n));
+      slides.forEach((s, idx) => s.classList.toggle("active", idx === i));
+      [...dots.children].forEach((d, idx) => d.classList.toggle("on", idx === i));
+      document.getElementById("prev").disabled = i === 0;
+      document.getElementById("next").disabled = i === slides.length - 1;
+    }
+
+    document.getElementById("prev").onclick = () => go(i - 1);
+    document.getElementById("next").onclick = () => go(i + 1);
+
+    window.addEventListener("keydown", (e) => {
+      if (e.key === "ArrowRight" || e.key === " " || e.key === "PageDown") {
+        e.preventDefault(); go(i + 1);
+      } else if (e.key === "ArrowLeft" || e.key === "PageUp") {
+        e.preventDefault(); go(i - 1);
+      } else if (e.key === "Home") {
+        go(0);
+      } else if (e.key === "End") {
+        go(slides.length - 1);
+      } else if (e.key === "f" || e.key === "F") {
+        if (!document.fullscreenElement) document.documentElement.requestFullscreen?.();
+        else document.exitFullscreen?.();
+      }
+    });
+
+    go(0);
+  </script>
+</body>
+</html>
