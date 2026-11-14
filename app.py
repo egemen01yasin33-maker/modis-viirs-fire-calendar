@@ -26,13 +26,12 @@ from src.analytics import (
     daily_hotspot_counts,
 )
 from src.archive_csv import (
-    MAX_ARCHIVE_DAY_SPAN,
-    MAX_GLOBAL_DAY_SPAN,
     ArchiveCsvError,
     data_dir,
     describe_csv_files,
     ensure_hotspots_db,
     list_archive_csv_files,
+    load_daily_activity,
     load_filtered_csvs,
     peek_archive_date_bounds,
     save_uploaded_csvs,
@@ -53,6 +52,8 @@ except ImportError:  # pragma: no cover
 from src.harmonize import (
     CATEGORY_COLORS,
     MATCHED,
+    MODIS_ONLY,
+    VIIRS_ONLY,
     activity_timeseries,
     harmonize_hotspots,
     summarize_categories,
@@ -356,12 +357,22 @@ def load_archive_slice(
     end_iso: str,
 ) -> dict:
     """
-    Stream archive CSVs, keep rows inside bbox + date window, then harmonize.
-
-    Cached by folder mtimes and the filter key so Apply reuses prior slices.
+    Load archive for any region/date span:
+    - exact daily activity series (SQL aggregate, full range)
+    - stratified point sample for the map (harmonized)
     """
+    folder = Path(folder_str)
+    daily, daily_stats = load_daily_activity(
+        folder,
+        min_lon=min_lon,
+        min_lat=min_lat,
+        max_lon=max_lon,
+        max_lat=max_lat,
+        start=start_iso,
+        end=end_iso,
+    )
     raw, names, stats = load_filtered_csvs(
-        Path(folder_str),
+        folder,
         min_lon=min_lon,
         min_lat=min_lat,
         max_lon=max_lon,
@@ -373,10 +384,12 @@ def load_archive_slice(
         harmonized = raw
     else:
         harmonized = harmonize_hotspots(raw)
+    stats = {**stats, **daily_stats}
     return {
-        "raw_rows": int(len(raw)),
+        "raw_rows": int(daily_stats.get("total_count") or len(raw)),
         "files": names,
         "harmonized": harmonized,
+        "daily": daily,
         "stats": stats,
         "mtimes_key": mtimes_key,
     }
@@ -553,24 +566,6 @@ def render_control_panel(
         )
         start_date, end_date = _parse_date_range(primary_range, default_end)
 
-        # Prevent multi-year Global pulls that freeze the browser
-        max_span = MAX_ARCHIVE_DAY_SPAN
-        if region_mode == "Preset" and region_name == "Global":
-            max_span = MAX_GLOBAL_DAY_SPAN
-        span = (end_date - start_date).days + 1
-        if source_mode == "Archive CSV" and span > max_span:
-            end_date = start_date + timedelta(days=max_span - 1)
-            if date_max and end_date > date_max:
-                end_date = date_max
-                start_date = max(
-                    archive_date_min or end_date,
-                    end_date - timedelta(days=max_span - 1),
-                )
-            st.warning(
-                f"Date range limited to {max_span} days so the page stays smooth "
-                f"({start_date} → {end_date})."
-            )
-
         compare_start = compare_end = None
         if compare_mode:
             compare_range = st.date_input(
@@ -680,28 +675,63 @@ def render_results(controls: dict) -> None:
         )
     )
     focused = harmonized.loc[focus_mask].copy()
-    if focused.empty:
+    if focused.empty and not harmonized.empty:
         focused = harmonized
 
-    daily_focus = daily_hotspot_counts(
-        focused,
-        start=pd.Timestamp(focus_start),
-        end=pd.Timestamp(focus_end),
-    )
+    # Full-range exact daily series from DuckDB (any Global / multi-year span)
+    daily_series = st.session_state.get("daily_series")
+    if isinstance(daily_series, pd.DataFrame) and not daily_series.empty:
+        ds = daily_series.copy()
+        ds["period"] = pd.to_datetime(ds["period"])
+        daily_focus = ds[
+            (ds["period"] >= pd.Timestamp(focus_start))
+            & (ds["period"] < pd.Timestamp(focus_end) + pd.Timedelta(days=1))
+        ].copy()
+        if daily_focus.empty:
+            daily_focus = ds
+        # Recompute anomaly stats on the focused window
+        positive = daily_focus.loc[daily_focus["total"] > 0, "total"]
+        mean_total = float(positive.mean()) if len(positive) else 0.0
+        thr = mean_total * 2.0
+        daily_focus["mean_total"] = mean_total
+        daily_focus["threshold"] = thr
+        daily_focus["is_anomaly"] = (daily_focus["total"] > thr) & (mean_total > 0)
+    else:
+        daily_focus = daily_hotspot_counts(
+            focused,
+            start=pd.Timestamp(focus_start),
+            end=pd.Timestamp(focus_end),
+        )
+
     anomalies = count_anomalies(daily_focus)
-    stats = summarize_categories(focused)
+    map_stats = summarize_categories(focused)
+    exact_total = (
+        int(daily_focus["total"].sum())
+        if not daily_focus.empty and "total" in daily_focus.columns
+        else map_stats["total"]
+    )
+    exact_modis = (
+        int(daily_focus[MODIS_ONLY].sum())
+        if not daily_focus.empty and MODIS_ONLY in daily_focus.columns
+        else map_stats["modis_only"]
+    )
+    exact_viirs = (
+        int(daily_focus[VIIRS_ONLY].sum())
+        if not daily_focus.empty and VIIRS_ONLY in daily_focus.columns
+        else map_stats["viirs_only"]
+    )
 
     if meta:
         st.caption(
-            f"{meta.get('region', '—')}  ·  loaded {start} → {end}  ·  "
+            f"{meta.get('region', '—')}  ·  {start} → {end}  ·  "
             f"focus {focus_start} → {focus_end}"
         )
 
     c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("Total", f"{stats['total']:,}")
-    c2.metric("Matched", f"{stats['matched']:,}")
-    c3.metric("MODIS only", f"{stats['modis_only']:,}")
-    c4.metric("VIIRS only", f"{stats['viirs_only']:,}")
+    c1.metric("Total", f"{exact_total:,}")
+    c2.metric("Matched (map)", f"{map_stats['matched']:,}")
+    c3.metric("MODIS", f"{exact_modis:,}")
+    c4.metric("VIIRS", f"{exact_viirs:,}")
     c5.metric("Busy days", anomalies)
 
     if comparison is not None and not comparison.empty:
@@ -710,9 +740,14 @@ def render_results(controls: dict) -> None:
 
     if anomalies and not daily_focus.empty:
         anomaly_days = daily_focus.loc[daily_focus["is_anomaly"], "period"]
+        # Cap labels so a dense Global window doesn't flood the page
         labels = ", ".join(
-            pd.Timestamp(d).strftime("%Y-%m-%d") for d in anomaly_days
+            pd.Timestamp(d).strftime("%Y-%m-%d")
+            for d in list(anomaly_days)[:12]
         )
+        extra = len(anomaly_days) - 12
+        if extra > 0:
+            labels = f"{labels} (+{extra} more)"
         st.warning(f"Unusually busy days: {labels}")
 
     st.divider()
@@ -721,7 +756,7 @@ def render_results(controls: dict) -> None:
     st.subheader("Map")
     st.caption("Matched · MODIS only · VIIRS only")
     map_fig = build_map_figure(focused, bbox=bbox)
-    map_fig.update_layout(height=520)
+    map_fig.update_layout(height=480)
     st.plotly_chart(
         map_fig,
         use_container_width=True,
@@ -734,15 +769,16 @@ def render_results(controls: dict) -> None:
     head_l, head_r = st.columns((2.2, 1.0))
     with head_l:
         st.caption(
-            "Pick a date range below — the map and metrics follow it. "
-            "You can also box-select bars on the chart."
+            "Global and multi-year ranges are fully supported. "
+            "Use the slider to zoom the map focus."
         )
     with head_r:
+        default_weekly = ((end - start).days >= 90)
         freq_choice = st.radio(
             "Detail",
             options=("Daily", "Weekly"),
             horizontal=True,
-            index=0 if controls.get("freq_choice", "Daily") == "Daily" else 1,
+            index=1 if default_weekly else 0,
             key="chart_freq",
         )
 
@@ -759,21 +795,40 @@ def render_results(controls: dict) -> None:
             key="chart_focus_slider",
         )
 
-    freq = "D" if freq_choice == "Daily" else "W-MON"
-    # Chart only the focused window (keeps Plotly light)
-    ts = activity_timeseries(
-        focused,
-        freq=freq,
-        start=pd.Timestamp(focus_start),
-        end=pd.Timestamp(focus_end),
-    )
-    if ts.empty and daily_focus.empty:
+    # Build chart series from exact daily aggregates (not the map sample)
+    if daily_focus.empty:
         st.info("Not enough data for the chart.")
     else:
+        chart_daily = daily_focus
+        if freq_choice == "Weekly" and not chart_daily.empty:
+            tmp = chart_daily.set_index("period").sort_index()
+            weekly = tmp.resample("W-MON").agg(
+                {
+                    "total": "sum",
+                    MATCHED: "sum",
+                    MODIS_ONLY: "sum",
+                    VIIRS_ONLY: "sum",
+                }
+            ).reset_index()
+            positive = weekly.loc[weekly["total"] > 0, "total"]
+            mean_total = float(positive.mean()) if len(positive) else 0.0
+            weekly["mean_total"] = mean_total
+            weekly["threshold"] = mean_total * 2.0
+            weekly["is_anomaly"] = (weekly["total"] > weekly["threshold"]) & (
+                mean_total > 0
+            )
+            chart_daily = weekly
+            freq_label = "Weekly"
+        else:
+            freq_label = "Daily"
+
+        ts = chart_daily[
+            [c for c in ("period", MATCHED, MODIS_ONLY, VIIRS_ONLY) if c in chart_daily.columns]
+        ].copy()
         fig = build_activity_chart(
-            ts if not ts.empty else pd.DataFrame(columns=["period"]),
-            freq_choice,
-            daily=daily_focus,
+            ts,
+            freq_label,
+            daily=chart_daily,
             focus_start=focus_start,
             focus_end=focus_end,
         )
@@ -863,15 +918,24 @@ def run_archive_pipeline(controls: dict) -> str | None:
 
     primary = payload["harmonized"]
     stats = payload.get("stats") or {}
-    if primary.empty:
+    daily = payload.get("daily")
+    if daily is None:
+        daily = pd.DataFrame()
+    total_count = int(
+        stats.get("total_count") or stats.get("rows_scanned") or len(primary)
+    )
+    if primary.empty and (daily.empty or int(daily.get("total", pd.Series(dtype=int)).sum()) == 0):
         st.warning("No fires found for this region and date range.")
         st.session_state.harmonized = None
+        st.session_state.daily_series = None
         st.session_state.comparison = None
         return None
 
-    if stats.get("truncated"):
-        st.warning(
-            "Too many points for one view — try a smaller region or shorter dates."
+    st.session_state.daily_series = daily
+    if stats.get("truncated") and total_count > len(primary):
+        st.caption(
+            f"Map shows a representative sample ({len(primary):,} of {total_count:,}). "
+            "Activity chart uses the complete selection."
         )
 
     st.session_state.harmonized = primary
@@ -880,10 +944,11 @@ def run_archive_pipeline(controls: dict) -> str | None:
         "bbox": (min_lon, min_lat, max_lon, max_lat),
         "start_date": controls["start_date"],
         "end_date": controls["end_date"],
-        "raw_rows": int(len(primary)),
+        "raw_rows": total_count,
         "source": "Archive CSV",
         "files": payload.get("files", []),
         "rows_scanned": int(stats.get("rows_scanned", 0)),
+        "map_sample": int(len(primary)),
     }
 
     st.session_state.comparison = None

@@ -24,12 +24,8 @@ DATA_DIRNAME = "data"
 CACHE_DIRNAME = "_cache"
 DB_FILENAME = "fires.duckdb"
 CHUNK_SIZE = 250_000
-# Soft cap after bbox+date filter — beyond this, ask the user to narrow scope
-# Hard cap — large Global pulls must not materialize millions of rows
-MAX_FILTERED_ROWS = 80_000
-# Soft guidance used by the UI
-MAX_ARCHIVE_DAY_SPAN = 31
-MAX_GLOBAL_DAY_SPAN = 7
+# Map / harmonize sample size — charts use full-range SQL aggregates instead
+MAX_FILTERED_ROWS = 60_000
 # Tiny fixtures kept in data/ for unit tests — skip in Archive mode inventory
 SKIP_FILENAMES = frozenset({"sample_firms.csv"})
 # Columns needed for harmonization + map (keep the query narrow/fast)
@@ -444,57 +440,55 @@ def _load_filtered_duckdb(
     path, rebuilt = ensure_hotspots_db(folder)
     con = duckdb.connect(path.as_posix(), read_only=True)
     try:
-        # Stratified sample across the date window so LIMIT never returns
-        # only the first few calendar days of a Global / multi-year query.
-        df = con.execute(
-            """
-            WITH filtered AS (
-              SELECT
-                latitude, longitude,
-                CAST(acq_date AS VARCHAR) AS acq_date,
-                acq_time, satellite, instrument, confidence, archive_file,
-                ntile(40) OVER (ORDER BY acq_date, longitude, latitude) AS bucket
-              FROM hotspots
-              WHERE acq_date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
-                AND longitude BETWEEN ? AND ?
-                AND latitude BETWEEN ? AND ?
-            ),
-            ranked AS (
-              SELECT
-                *,
-                row_number() OVER (
-                  PARTITION BY bucket
-                  ORDER BY hash(latitude * 1000 + longitude)
-                ) AS rn,
-                count(*) OVER () AS total_n
-              FROM filtered
-            )
-            SELECT
-              latitude, longitude, acq_date, acq_time,
-              satellite, instrument, confidence, archive_file,
-              total_n
-            FROM ranked
-            WHERE rn <= CAST(ceil(? * 1.0 / 40) AS BIGINT)
-            LIMIT ?
-            """,
-            [
-                start_s,
-                end_s,
-                min_lon,
-                max_lon,
-                min_lat,
-                max_lat,
-                max_rows,
-                max_rows + 1,
-            ],
-        ).df()
+        total_n = int(
+            con.execute(
+                """
+                SELECT count(*) FROM hotspots
+                WHERE acq_date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
+                  AND longitude BETWEEN ? AND ?
+                  AND latitude BETWEEN ? AND ?
+                """,
+                [start_s, end_s, min_lon, max_lon, min_lat, max_lat],
+            ).fetchone()[0]
+        )
+        if total_n == 0:
+            df = pd.DataFrame()
+        elif total_n <= max_rows:
+            df = con.execute(
+                """
+                SELECT
+                  latitude, longitude,
+                  CAST(acq_date AS VARCHAR) AS acq_date,
+                  acq_time, satellite, instrument, confidence, archive_file
+                FROM hotspots
+                WHERE acq_date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
+                  AND longitude BETWEEN ? AND ?
+                  AND latitude BETWEEN ? AND ?
+                """,
+                [start_s, end_s, min_lon, max_lon, min_lat, max_lat],
+            ).df()
+        else:
+            # Fast reservoir sample — keeps Global / multi-year map updates snappy
+            df = con.execute(
+                f"""
+                SELECT
+                  latitude, longitude,
+                  CAST(acq_date AS VARCHAR) AS acq_date,
+                  acq_time, satellite, instrument, confidence, archive_file
+                FROM (
+                  SELECT * FROM hotspots
+                  WHERE acq_date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
+                    AND longitude BETWEEN ? AND ?
+                    AND latitude BETWEEN ? AND ?
+                ) AS filtered
+                USING SAMPLE {int(max_rows)}
+                """,
+                [start_s, end_s, min_lon, max_lon, min_lat, max_lat],
+            ).df()
     finally:
         con.close()
 
-    total_n = int(df["total_n"].iloc[0]) if not df.empty and "total_n" in df.columns else 0
-    if "total_n" in df.columns:
-        df = df.drop(columns=["total_n"])
-    truncated = total_n > max_rows or len(df) > max_rows
+    truncated = total_n > max_rows
     if len(df) > max_rows:
         df = df.iloc[:max_rows].copy()
 
@@ -508,6 +502,106 @@ def _load_filtered_duckdb(
         "cache_rebuilt": int(rebuilt),
     }
     return df, names, stats
+
+
+def load_daily_activity(
+    folder: Path,
+    min_lon: float,
+    min_lat: float,
+    max_lon: float,
+    max_lat: float,
+    start: date | datetime | str,
+    end: date | datetime | str,
+) -> tuple[pd.DataFrame, dict]:
+    """
+    Exact daily totals for any bbox + date span via DuckDB GROUP BY.
+
+    Does not load individual points — safe for Global + multi-year charts.
+    Returns (daily_df, stats) with columns:
+      period, total, MODIS-only, VIIRS-only, Matched (High Confidence)=0,
+      is_anomaly, mean_total, threshold
+    """
+    from src.harmonize import MATCHED, MODIS_ONLY, VIIRS_ONLY
+
+    ensure_hotspots_db(folder)
+    import duckdb
+
+    start_s = pd.Timestamp(start).strftime("%Y-%m-%d")
+    end_s = pd.Timestamp(end).strftime("%Y-%m-%d")
+    path = db_path(folder)
+    con = duckdb.connect(path.as_posix(), read_only=True)
+    try:
+        daily = con.execute(
+            """
+            SELECT
+              acq_date AS period,
+              count(*)::BIGINT AS total,
+              sum(
+                CASE
+                  WHEN lower(coalesce(instrument, '')) LIKE '%modis%'
+                    OR lower(coalesce(satellite, '')) IN ('terra', 'aqua')
+                  THEN 1 ELSE 0
+                END
+              )::BIGINT AS modis_n,
+              sum(
+                CASE
+                  WHEN lower(coalesce(instrument, '')) LIKE '%modis%'
+                    OR lower(coalesce(satellite, '')) IN ('terra', 'aqua')
+                  THEN 0 ELSE 1
+                END
+              )::BIGINT AS viirs_n
+            FROM hotspots
+            WHERE acq_date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
+              AND longitude BETWEEN ? AND ?
+              AND latitude BETWEEN ? AND ?
+            GROUP BY acq_date
+            ORDER BY acq_date
+            """,
+            [start_s, end_s, min_lon, max_lon, min_lat, max_lat],
+        ).df()
+        total_count = int(
+            con.execute(
+                """
+                SELECT count(*) FROM hotspots
+                WHERE acq_date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
+                  AND longitude BETWEEN ? AND ?
+                  AND latitude BETWEEN ? AND ?
+                """,
+                [start_s, end_s, min_lon, max_lon, min_lat, max_lat],
+            ).fetchone()[0]
+        )
+    finally:
+        con.close()
+
+    if daily.empty:
+        empty = pd.DataFrame(
+            columns=[
+                "period",
+                "total",
+                MATCHED,
+                MODIS_ONLY,
+                VIIRS_ONLY,
+                "is_anomaly",
+                "mean_total",
+                "threshold",
+            ]
+        )
+        return empty, {"total_count": 0, "days": 0}
+
+    daily["period"] = pd.to_datetime(daily["period"])
+    daily[MODIS_ONLY] = daily["modis_n"].astype(int)
+    daily[VIIRS_ONLY] = daily["viirs_n"].astype(int)
+    daily[MATCHED] = 0
+    daily["total"] = daily["total"].astype(int)
+    positive = daily.loc[daily["total"] > 0, "total"]
+    mean_total = float(positive.mean()) if len(positive) else 0.0
+    threshold = mean_total * 2.0
+    daily["mean_total"] = mean_total
+    daily["threshold"] = threshold
+    daily["is_anomaly"] = (daily["total"] > threshold) & (mean_total > 0)
+    daily = daily.drop(columns=["modis_n", "viirs_n"])
+    stats = {"total_count": total_count, "days": int(len(daily))}
+    return daily, stats
 
 
 def _load_filtered_pandas(
