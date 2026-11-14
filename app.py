@@ -31,7 +31,6 @@ SAMPLE_CSV = ROOT / "data" / "sample_firms.csv"
 
 st.set_page_config(
     page_title="Unified Fire Activity Calendar",
-    page_icon="🔥",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -233,7 +232,7 @@ def main() -> None:
     with left:
         st.subheader("Harmonize Harita")
         st.caption(
-            "🟢 Matched (High Confidence) · 🟠 MODIS-only · 🔵 VIIRS-only"
+            "Yeşil = Matched (High Confidence) · Turuncu = MODIS-only · Mavi = VIIRS-only"
         )
         fmap = build_map(filtered)
         st_folium(fmap, width=None, height=480, returned_objects=[])
