@@ -19,9 +19,17 @@ import requests
 FIRMS_AREA_BASE = "https://firms.modaps.eosdis.nasa.gov/api/area/csv"
 
 # Preset regions: (min_lon, min_lat, max_lon, max_lat)
+# Note: FIRMS Area API rejects extremely large boxes; Global uses a
+# near-world window that may still fail on some keys — prefer named regions.
 PRESET_REGIONS: dict[str, tuple[float, float, float, float]] = {
+    "Global": (-180.0, -60.0, 180.0, 75.0),
+    "Amazon": (-74.0, -15.0, -48.0, 5.0),
+    "Australia": (112.0, -44.0, 154.0, -10.0),
+    "California": (-124.5, 32.5, -114.0, 42.0),
+    "Mediterranean": (-6.0, 30.0, 37.0, 46.0),
+    "Siberia": (60.0, 50.0, 140.0, 75.0),
+    "Indonesia": (95.0, -11.0, 141.0, 6.0),
     "Turkey": (25.5, 35.8, 45.0, 42.3),
-    "Mediterranean": (27.5, 36.0, 37.5, 38.5),
     "Aegean": (26.0, 36.5, 30.0, 40.0),
     "Central Anatolia": (31.0, 37.5, 36.0, 41.0),
     "Marmara": (26.0, 39.5, 30.5, 41.8),
