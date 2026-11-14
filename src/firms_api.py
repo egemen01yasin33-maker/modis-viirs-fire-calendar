@@ -186,7 +186,9 @@ def fetch_firms_area(
     """
     key = (map_key or "").strip()
     if not key:
-        raise FirmsApiError("MAP_KEY gerekli. Kenar çubuğuna FIRMS anahtarınızı girin.")
+        raise FirmsApiError(
+            "MAP_KEY gerekli. `.env` dosyasına FIRMS_MAP_KEY ekleyin."
+        )
 
     sensor_list = [s for s in sensors if s]
     if not sensor_list:

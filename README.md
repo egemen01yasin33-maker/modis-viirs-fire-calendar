@@ -8,7 +8,7 @@ MODIS ↔ VIIRS eşleşmelerini *Matched (High Confidence)* olarak işaretler.
 
 ## Özellikler
 
-1. **MAP_KEY** — kenar çubuğunda parola alanı; kaydedilmez, loglanmaz
+1. **FIRMS_MAP_KEY** — `.env` dosyasından okunur (Git’e eklenmez)
 2. **Bölge** — Türkiye, Akdeniz, Ege, İç Anadolu veya manuel bbox
 3. **Sensörler** — `MODIS_NRT`, `VIIRS_NOAA20_NRT`, `VIIRS_NOAA21_NRT` (çoklu)
 4. **Gün sayısı** — 1–10 slider
@@ -23,12 +23,13 @@ MODIS ↔ VIIRS eşleşmelerini *Matched (High Confidence)* olarak işaretler.
 python -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
+cp .env.example .env        # FIRMS_MAP_KEY değerini yazın
 streamlit run app.py --server.port 8529
 ```
 
 1. [FIRMS MAP Key](https://firms.modaps.eosdis.nasa.gov/api/key/) alın.
-2. Kenar çubuğuna yapıştırın, bölge/sensör/gün seçin.
-3. **Veriyi Getir**’e basın.
+2. `.env` içine `FIRMS_MAP_KEY=...` yazın.
+3. Bölge/sensör/gün seçip **Veriyi Getir**’e basın.
 
 ## Proje yapısı
 
@@ -37,6 +38,7 @@ app.py                 # Streamlit arayüzü
 src/firms_api.py       # FIRMS Area API istemcisi
 src/harmonize.py       # Mesafe/zaman eşleme
 data/sample_firms.csv  # Harmonizasyon birim testleri için örnek
+.env.example           # Anahtar şablonu (.env Git'te yok)
 requirements.txt
 ```
 
@@ -65,5 +67,5 @@ python tests/test_firms_api.py
 
 ## Güvenlik notu
 
-`MAP_KEY` yalnızca istek anında kullanılır; `session_state`’e yazılmaz,
-dosyaya kaydedilmez ve hata mesajlarında gösterilmez.
+`FIRMS_MAP_KEY` `.env` dosyasındadır ve `.gitignore` ile hariç tutulur.
+Anahtar loglanmaz, `session_state`’e yazılmaz ve hata mesajlarında gösterilmez.

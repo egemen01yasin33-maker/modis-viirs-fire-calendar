@@ -5,15 +5,19 @@ NASA Space Apps Challenge 2026 – MODIS ve VIIRS hot spot harmonizasyonu.
 FIRMS Area API'den veri çeker; 1 km / ±6 saat ile eşleştirir; harita ve
 aktivite takviminde gösterir.
 
-MAP_KEY yalnızca istek anında kullanılır; kaydedilmez ve loglanmaz.
+FIRMS_MAP_KEY .env dosyasından okunur; loglanmaz ve Git'e eklenmez.
 """
 
 from __future__ import annotations
+
+import os
+from pathlib import Path
 
 import folium
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+from dotenv import load_dotenv
 from streamlit_folium import st_folium
 
 from src.firms_api import (
@@ -31,11 +35,20 @@ from src.harmonize import (
     validate_firms_columns,
 )
 
+# Proje kökündeki .env — anahtar yalnızca ortam değişkeninde tutulur
+ROOT = Path(__file__).resolve().parent
+load_dotenv(ROOT / ".env")
+
 st.set_page_config(
     page_title="Unified Fire Activity Calendar",
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+
+def get_firms_map_key() -> str:
+    """FIRMS_MAP_KEY'i ortamdan okur (değer loglanmaz)."""
+    return (os.getenv("FIRMS_MAP_KEY") or "").strip()
 
 
 def build_map(df: pd.DataFrame) -> folium.Map:
@@ -107,11 +120,7 @@ def build_activity_chart(ts: pd.DataFrame, freq_label: str) -> go.Figure:
 
 
 def render_sidebar() -> dict:
-    """Kenar çubuğu kontrolleri; MAP_KEY yalnızca bellek içi döner.
-
-    İstek parametreleri st.form içinde toplanır; böylece widget değişiklikleri
-    API çağrısını tetiklemez ve form_submit_button tıklaması güvenilir olur.
-    """
+    """Kenar çubuğu: bölge, sensör, gün — MAP_KEY yok (.env'den okunur)."""
     with st.sidebar:
         st.header("FIRMS Ayarları")
 
@@ -124,18 +133,6 @@ def render_sidebar() -> dict:
         )
 
         with st.form("firms_fetch_form", clear_on_submit=False):
-            # type=password → ekranda gizlenir; diske yazılmaz
-            map_key = st.text_input(
-                "MAP_KEY",
-                type="password",
-                help=(
-                    "NASA FIRMS API anahtarı. "
-                    "https://firms.modaps.eosdis.nasa.gov/api/ üzerinden alınır. "
-                    "Anahtar kaydedilmez ve loglanmaz."
-                ),
-                placeholder="FIRMS MAP_KEY girin",
-            )
-
             if region_mode == "Hazır bölge":
                 region_name = st.selectbox(
                     "Hazır bölgeler",
@@ -171,7 +168,6 @@ def render_sidebar() -> dict:
                 use_container_width=True,
             )
 
-        # Görüntüleme tercihi — veri çekmeden grafiği günceller
         freq_choice = st.radio(
             "Takvim frekansı",
             options=("Günlük", "Haftalık"),
@@ -185,7 +181,6 @@ def render_sidebar() -> dict:
         )
 
     return {
-        "map_key": map_key,
         "region_name": region_name,
         "min_lon": float(min_lon),
         "min_lat": float(min_lat),
@@ -209,25 +204,39 @@ def main() -> None:
         """
     )
 
+    map_key = get_firms_map_key()
+    if not map_key:
+        st.warning(
+            "`.env` dosyasına `FIRMS_MAP_KEY` ekleyin. "
+            "Örnek: projede `.env.example` dosyasına bakın."
+        )
+        with st.expander(".env nasıl ayarlanır?"):
+            st.markdown(
+                """
+                1. [FIRMS MAP Key](https://firms.modaps.eosdis.nasa.gov/api/key/) alın.
+                2. Proje klasöründe `.env` oluşturun:
+                ```
+                FIRMS_MAP_KEY=senin_keyin_buraya
+                ```
+                3. Uygulamayı yeniden başlatın. `.env` Git'e eklenmez.
+                """
+            )
+        return
+
     controls = render_sidebar()
 
-    # Sonuçları oturumda tut (MAP_KEY tutulmaz)
     if "harmonized" not in st.session_state:
         st.session_state.harmonized = None
         st.session_state.last_meta = None
 
     if controls["fetch_clicked"]:
-        map_key = controls["map_key"]
-        if not (map_key or "").strip():
-            st.error("MAP_KEY gerekli. Kenar çubuğuna FIRMS anahtarınızı girin.")
-            st.session_state.harmonized = None
-        elif not controls["sensors"]:
+        if not controls["sensors"]:
             st.error("En az bir sensör seçin.")
             st.session_state.harmonized = None
         else:
             with st.spinner("FIRMS API'den veri getiriliyor…"):
                 try:
-                    # map_key yalnızca bu çağrıya verilir; session_state'e yazılmaz
+                    # map_key yalnızca bu çağrıya verilir; loglanmaz / state'e yazılmaz
                     raw = fetch_firms_area(
                         map_key=map_key,
                         sensors=controls["sensors"],
@@ -290,23 +299,13 @@ def main() -> None:
                 "days": controls["days"],
                 "raw_rows": int(len(raw)),
             }
-            # map_key burada bilinçli olarak saklanmıyor
 
     harmonized = st.session_state.harmonized
     if harmonized is None:
         st.info(
-            "Başlamak için kenar çubuğuna **MAP_KEY** girin, bölge ve sensörleri "
-            "seçin, ardından **Veriyi Getir**’e basın."
+            "Bölge ve sensörleri seçip **Veriyi Getir**’e basın. "
+            "API anahtarı `.env` içindeki `FIRMS_MAP_KEY` ile yüklenir."
         )
-        with st.expander("MAP_KEY nasıl alınır?"):
-            st.markdown(
-                """
-                1. [FIRMS MAP Key](https://firms.modaps.eosdis.nasa.gov/api/key/)
-                   sayfasından ücretsiz anahtar oluşturun.
-                2. Anahtarı kenar çubuğundaki alana yapıştırın (ekranda gizlenir).
-                3. Anahtar bu uygulamada **kaydedilmez** ve loglanmaz.
-                """
-            )
         return
 
     meta = st.session_state.last_meta or {}
@@ -318,7 +317,6 @@ def main() -> None:
             f"Ham satır: {meta.get('raw_rows', '—')}"
         )
 
-    # Tarih aralığı filtresi
     min_d = harmonized["acq_datetime"].min().date()
     max_d = harmonized["acq_datetime"].max().date()
     date_range = st.date_input(
@@ -343,7 +341,6 @@ def main() -> None:
 
     stats = summarize_categories(filtered)
 
-    # --- İstatistik kartları ---
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Toplam", stats["total"])
     c2.metric("Matched", stats["matched"])
