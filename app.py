@@ -41,7 +41,19 @@ load_dotenv(ROOT / ".env")
 st.set_page_config(
     page_title="Unified Fire Activity Calendar",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
+)
+
+# Hide the default left sidebar entirely — controls live at the bottom
+st.markdown(
+    """
+    <style>
+      [data-testid="stSidebar"] { display: none !important; }
+      [data-testid="stSidebarCollapsedControl"] { display: none !important; }
+      section.main .block-container { padding-top: 1.5rem; }
+    </style>
+    """,
+    unsafe_allow_html=True,
 )
 
 
@@ -120,19 +132,20 @@ def build_activity_chart(ts: pd.DataFrame, freq_label: str) -> go.Figure:
     return fig
 
 
-def render_sidebar() -> dict:
-    """Sidebar: region, sensors, days — MAP_KEY comes from .env."""
-    with st.sidebar:
-        st.header("FIRMS Settings")
+def render_control_panel() -> dict:
+    """Bottom control panel: region, sensors, days — MAP_KEY from .env."""
+    st.header("FIRMS Settings")
 
-        st.subheader("Region")
-        region_mode = st.radio(
-            "Region mode",
-            options=("Preset region", "Manual bbox"),
-            horizontal=True,
-        )
+    region_mode = st.radio(
+        "Region mode",
+        options=("Preset region", "Manual bbox"),
+        horizontal=True,
+    )
 
-        with st.form("firms_fetch_form", clear_on_submit=False):
+    with st.form("firms_fetch_form", clear_on_submit=False):
+        col_a, col_b, col_c = st.columns((1.2, 1.2, 0.8))
+
+        with col_a:
             if region_mode == "Preset region":
                 region_name = st.selectbox(
                     "Preset regions",
@@ -145,40 +158,42 @@ def render_sidebar() -> dict:
                 )
             else:
                 region_name = "Manual"
-                c1, c2 = st.columns(2)
-                with c1:
+                r1, r2 = st.columns(2)
+                with r1:
                     min_lon = st.number_input("min_lon", value=26.0, format="%.4f")
                     min_lat = st.number_input("min_lat", value=36.0, format="%.4f")
-                with c2:
+                with r2:
                     max_lon = st.number_input("max_lon", value=30.0, format="%.4f")
                     max_lat = st.number_input("max_lat", value=40.0, format="%.4f")
 
+        with col_b:
             sensors = st.multiselect(
                 "Sensors",
                 options=list(AVAILABLE_SENSORS),
                 default=list(AVAILABLE_SENSORS),
                 help="Select one or more sensors; results are combined.",
             )
-
             days = st.slider("Number of days", min_value=1, max_value=10, value=3)
 
+        with col_c:
+            st.write("")
+            st.write("")
             fetch_clicked = st.form_submit_button(
                 "Fetch Data",
                 type="primary",
                 use_container_width=True,
             )
 
-        freq_choice = st.radio(
-            "Calendar frequency",
-            options=("Daily", "Weekly"),
-            horizontal=True,
-        )
+    freq_choice = st.radio(
+        "Calendar frequency",
+        options=("Daily", "Weekly"),
+        horizontal=True,
+    )
 
-        st.divider()
-        st.caption(
-            "Source: [NASA FIRMS](https://firms.modaps.eosdis.nasa.gov/) · "
-            "Space Apps 2026 – Hot Spot Harmonization"
-        )
+    st.caption(
+        "Source: [NASA FIRMS](https://firms.modaps.eosdis.nasa.gov/) · "
+        "Space Apps 2026 – Hot Spot Harmonization"
+    )
 
     return {
         "region_name": region_name,
@@ -193,117 +208,8 @@ def render_sidebar() -> dict:
     }
 
 
-def main() -> None:
-    st.title("Unified Fire Activity Calendar")
-    st.markdown(
-        """
-        Pulls live NASA FIRMS **MODIS** and **VIIRS** hot spots and merges
-        detections within **1 km** and **±6 hours**. Matches are labeled
-        *Matched (High Confidence)*; the rest appear as *MODIS-only* /
-        *VIIRS-only* on the map and calendar.
-        """
-    )
-
-    map_key = get_firms_map_key()
-    if not map_key:
-        st.warning(
-            "Add `FIRMS_MAP_KEY` to your `.env` file. "
-            "See `.env.example` in the project root."
-        )
-        with st.expander("How to set up .env"):
-            st.markdown(
-                """
-                1. Get a free key from
-                   [FIRMS MAP Key](https://firms.modaps.eosdis.nasa.gov/api/key/).
-                2. Create a `.env` file in the project folder:
-                ```
-                FIRMS_MAP_KEY=your_key_here
-                ```
-                3. Restart the app. `.env` is gitignored and never committed.
-                """
-            )
-        return
-
-    controls = render_sidebar()
-
-    if "harmonized" not in st.session_state:
-        st.session_state.harmonized = None
-        st.session_state.last_meta = None
-
-    if controls["fetch_clicked"]:
-        if not controls["sensors"]:
-            st.error("Select at least one sensor.")
-            st.session_state.harmonized = None
-        else:
-            with st.spinner("Fetching data from FIRMS…"):
-                try:
-                    raw = fetch_firms_area(
-                        map_key=map_key,
-                        sensors=controls["sensors"],
-                        min_lon=controls["min_lon"],
-                        min_lat=controls["min_lat"],
-                        max_lon=controls["max_lon"],
-                        max_lat=controls["max_lat"],
-                        days=controls["days"],
-                    )
-                except FirmsApiError as exc:
-                    st.error(str(exc))
-                    st.session_state.harmonized = None
-                    return
-                except Exception:  # noqa: BLE001 — avoid leaking the key
-                    st.error(
-                        "An unexpected error occurred. Check your connection "
-                        "and parameters, then try again."
-                    )
-                    st.session_state.harmonized = None
-                    return
-
-            if raw.empty:
-                st.warning(
-                    "No hot spots found for this region, sensors, and day range. "
-                    "Try a wider bbox or more days."
-                )
-                st.session_state.harmonized = None
-                return
-
-            missing = validate_firms_columns(raw)
-            if missing:
-                st.error(
-                    "FIRMS response is missing columns: "
-                    + ", ".join(missing)
-                )
-                st.session_state.harmonized = None
-                return
-
-            with st.spinner("Harmonizing hot spots…"):
-                harmonized = harmonize_hotspots(raw)
-
-            if harmonized.empty:
-                st.warning(
-                    "No valid MODIS/VIIRS rows could be parsed. "
-                    "Check the satellite / instrument fields in the response."
-                )
-                st.session_state.harmonized = None
-                return
-
-            st.session_state.harmonized = harmonized
-            st.session_state.last_meta = {
-                "region": controls["region_name"],
-                "bbox": (
-                    controls["min_lon"],
-                    controls["min_lat"],
-                    controls["max_lon"],
-                    controls["max_lat"],
-                ),
-                "sensors": list(controls["sensors"]),
-                "days": controls["days"],
-                "raw_rows": int(len(raw)),
-            }
-
-    harmonized = st.session_state.harmonized
-    if harmonized is None:
-        return
-
+def render_results(harmonized: pd.DataFrame, controls: dict) -> None:
+    """Map, calendar, and table for the current harmonized dataset."""
     meta = st.session_state.last_meta or {}
     if meta:
         st.caption(
@@ -396,6 +302,123 @@ def main() -> None:
             file_name="harmonized_hotspots.csv",
             mime="text/csv",
         )
+
+
+def main() -> None:
+    st.title("Unified Fire Activity Calendar")
+    st.markdown(
+        """
+        Pulls live NASA FIRMS **MODIS** and **VIIRS** hot spots and merges
+        detections within **1 km** and **±6 hours**. Matches are labeled
+        *Matched (High Confidence)*; the rest appear as *MODIS-only* /
+        *VIIRS-only* on the map and calendar.
+        """
+    )
+
+    map_key = get_firms_map_key()
+    if not map_key:
+        st.warning(
+            "Add `FIRMS_MAP_KEY` to your `.env` file. "
+            "See `.env.example` in the project root."
+        )
+        with st.expander("How to set up .env"):
+            st.markdown(
+                """
+                1. Get a free key from
+                   [FIRMS MAP Key](https://firms.modaps.eosdis.nasa.gov/api/key/).
+                2. Create a `.env` file in the project folder:
+                ```
+                FIRMS_MAP_KEY=your_key_here
+                ```
+                3. Restart the app. `.env` is gitignored and never committed.
+                """
+            )
+        return
+
+    if "harmonized" not in st.session_state:
+        st.session_state.harmonized = None
+        st.session_state.last_meta = None
+
+    # Results render above the control panel (container order)
+    results_area = st.container()
+
+    st.divider()
+    controls = render_control_panel()
+
+    if controls["fetch_clicked"]:
+        if not controls["sensors"]:
+            st.error("Select at least one sensor.")
+            st.session_state.harmonized = None
+        else:
+            with st.spinner("Fetching data from FIRMS…"):
+                try:
+                    raw = fetch_firms_area(
+                        map_key=map_key,
+                        sensors=controls["sensors"],
+                        min_lon=controls["min_lon"],
+                        min_lat=controls["min_lat"],
+                        max_lon=controls["max_lon"],
+                        max_lat=controls["max_lat"],
+                        days=controls["days"],
+                    )
+                except FirmsApiError as exc:
+                    st.error(str(exc))
+                    st.session_state.harmonized = None
+                    return
+                except Exception:  # noqa: BLE001 — avoid leaking the key
+                    st.error(
+                        "An unexpected error occurred. Check your connection "
+                        "and parameters, then try again."
+                    )
+                    st.session_state.harmonized = None
+                    return
+
+            if raw.empty:
+                st.warning(
+                    "No hot spots found for this region, sensors, and day range. "
+                    "Try a wider bbox or more days."
+                )
+                st.session_state.harmonized = None
+                return
+
+            missing = validate_firms_columns(raw)
+            if missing:
+                st.error(
+                    "FIRMS response is missing columns: "
+                    + ", ".join(missing)
+                )
+                st.session_state.harmonized = None
+                return
+
+            with st.spinner("Harmonizing hot spots…"):
+                harmonized = harmonize_hotspots(raw)
+
+            if harmonized.empty:
+                st.warning(
+                    "No valid MODIS/VIIRS rows could be parsed. "
+                    "Check the satellite / instrument fields in the response."
+                )
+                st.session_state.harmonized = None
+                return
+
+            st.session_state.harmonized = harmonized
+            st.session_state.last_meta = {
+                "region": controls["region_name"],
+                "bbox": (
+                    controls["min_lon"],
+                    controls["min_lat"],
+                    controls["max_lon"],
+                    controls["max_lat"],
+                ),
+                "sensors": list(controls["sensors"]),
+                "days": controls["days"],
+                "raw_rows": int(len(raw)),
+            }
+
+    harmonized = st.session_state.harmonized
+    if harmonized is not None:
+        with results_area:
+            render_results(harmonized, controls)
 
 
 if __name__ == "__main__":
