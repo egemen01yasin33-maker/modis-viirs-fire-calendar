@@ -24,8 +24,8 @@ DATA_DIRNAME = "data"
 CACHE_DIRNAME = "_cache"
 DB_FILENAME = "fires.duckdb"
 CHUNK_SIZE = 250_000
-# Map / harmonize sample size — charts use full-range SQL aggregates instead
-MAX_FILTERED_ROWS = 60_000
+# Map sample size — charts use full-range SQL aggregates instead
+MAX_FILTERED_ROWS = 20_000
 # Tiny fixtures kept in data/ for unit tests — skip in Archive mode inventory
 SKIP_FILENAMES = frozenset({"sample_firms.csv"})
 # Columns needed for harmonization + map (keep the query narrow/fast)
@@ -376,6 +376,7 @@ def load_filtered_csvs(
     *,
     chunksize: int = CHUNK_SIZE,
     max_rows: int = MAX_FILTERED_ROWS,
+    known_total: int | None = None,
 ) -> tuple[pd.DataFrame, list[str], dict]:
     """
     Keep rows inside bbox + date window.
@@ -405,6 +406,7 @@ def load_filtered_csvs(
             start_s=start_s,
             end_s=end_s,
             max_rows=max_rows,
+            known_total=known_total,
         )
     except ArchiveCsvError:
         raise
@@ -434,22 +436,27 @@ def _load_filtered_duckdb(
     start_s: str,
     end_s: str,
     max_rows: int,
+    known_total: int | None = None,
 ) -> tuple[pd.DataFrame, list[str], dict]:
     import duckdb
 
     path, rebuilt = ensure_hotspots_db(folder)
     con = duckdb.connect(path.as_posix(), read_only=True)
     try:
-        total_n = int(
-            con.execute(
-                """
-                SELECT count(*) FROM hotspots
-                WHERE acq_date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
-                  AND longitude BETWEEN ? AND ?
-                  AND latitude BETWEEN ? AND ?
-                """,
-                [start_s, end_s, min_lon, max_lon, min_lat, max_lat],
-            ).fetchone()[0]
+        total_n = (
+            int(known_total)
+            if known_total is not None
+            else int(
+                con.execute(
+                    """
+                    SELECT count(*) FROM hotspots
+                    WHERE acq_date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
+                      AND longitude BETWEEN ? AND ?
+                      AND latitude BETWEEN ? AND ?
+                    """,
+                    [start_s, end_s, min_lon, max_lon, min_lat, max_lat],
+                ).fetchone()[0]
+            )
         )
         if total_n == 0:
             df = pd.DataFrame()
@@ -468,23 +475,46 @@ def _load_filtered_duckdb(
                 [start_s, end_s, min_lon, max_lon, min_lat, max_lat],
             ).df()
         else:
-            # Fast reservoir sample — keeps Global / multi-year map updates snappy
+            # Hash filter + LIMIT is much faster than full reservoir on 100M+ rows
             df = con.execute(
-                f"""
+                """
                 SELECT
                   latitude, longitude,
                   CAST(acq_date AS VARCHAR) AS acq_date,
                   acq_time, satellite, instrument, confidence, archive_file
-                FROM (
-                  SELECT * FROM hotspots
-                  WHERE acq_date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
-                    AND longitude BETWEEN ? AND ?
-                    AND latitude BETWEEN ? AND ?
-                ) AS filtered
-                USING SAMPLE {int(max_rows)}
+                FROM hotspots
+                WHERE acq_date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
+                  AND longitude BETWEEN ? AND ?
+                  AND latitude BETWEEN ? AND ?
+                  AND (hash(latitude, longitude, acq_date) % 50) = 0
+                LIMIT ?
                 """,
-                [start_s, end_s, min_lon, max_lon, min_lat, max_lat],
+                [start_s, end_s, min_lon, max_lon, min_lat, max_lat, max_rows],
             ).df()
+            if len(df) < min(max_rows, 1000):
+                # Sparse region — fall back to plain LIMIT
+                df = con.execute(
+                    """
+                    SELECT
+                      latitude, longitude,
+                      CAST(acq_date AS VARCHAR) AS acq_date,
+                      acq_time, satellite, instrument, confidence, archive_file
+                    FROM hotspots
+                    WHERE acq_date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
+                      AND longitude BETWEEN ? AND ?
+                      AND latitude BETWEEN ? AND ?
+                    LIMIT ?
+                    """,
+                    [
+                        start_s,
+                        end_s,
+                        min_lon,
+                        max_lon,
+                        min_lat,
+                        max_lat,
+                        max_rows,
+                    ],
+                ).df()
     finally:
         con.close()
 

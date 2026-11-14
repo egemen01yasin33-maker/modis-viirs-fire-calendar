@@ -102,8 +102,11 @@ def _map_zoom_for_bbox(
     return 7
 
 
-MAX_MAP_POINTS = 800
-MAX_CHART_ANOMALIES = 25
+MAX_MAP_POINTS = 450
+MAX_CHART_ANOMALIES = 15
+MAX_CHART_POINTS = 180
+# Skip expensive MODIS↔VIIRS matching above this map-sample size
+MATCH_ROW_LIMIT = 8_000
 
 
 def _sample_for_map(df: pd.DataFrame, limit: int = MAX_MAP_POINTS) -> pd.DataFrame:
@@ -223,27 +226,48 @@ def build_activity_chart(
         cat_cols = [c for c in CATEGORY_COLORS if c in work.columns]
         work["total"] = work[cat_cols].sum(axis=1) if cat_cols else 0
 
-    for col, color in CATEGORY_COLORS.items():
-        if col not in work.columns:
-            continue
-        fig.add_trace(
-            go.Bar(
-                x=work["period"],
-                y=work[col],
-                name=col,
-                marker_color=color,
-                opacity=0.9,
-                hovertemplate="%{x|%Y-%m-%d}<br>" + col + ": %{y:,}<extra></extra>",
+    # Prefer lines for long series (bars freeze the browser); bars only for short windows
+    use_bars = len(work) <= 60
+    if use_bars:
+        for col, color in CATEGORY_COLORS.items():
+            if col not in work.columns:
+                continue
+            fig.add_trace(
+                go.Bar(
+                    x=work["period"],
+                    y=work[col],
+                    name=col,
+                    marker_color=color,
+                    opacity=0.9,
+                    hovertemplate="%{x|%Y-%m-%d}<br>"
+                    + col
+                    + ": %{y:,}<extra></extra>",
+                )
             )
-        )
+    else:
+        for col, color in CATEGORY_COLORS.items():
+            if col not in work.columns:
+                continue
+            fig.add_trace(
+                go.Scatter(
+                    x=work["period"],
+                    y=work[col],
+                    mode="lines",
+                    name=col,
+                    line=dict(color=color, width=1.6),
+                    hovertemplate="%{x|%Y-%m-%d}<br>"
+                    + col
+                    + ": %{y:,}<extra></extra>",
+                )
+            )
 
     fig.add_trace(
         go.Scatter(
             x=work["period"],
             y=work["total"],
             mode="lines",
-            name="Daily total",
-            line=dict(color="#ffffff", width=2.2),
+            name="Total",
+            line=dict(color="#ffffff", width=2.4),
             hovertemplate="%{x|%Y-%m-%d}<br>Total: %{y:,}<extra></extra>",
         )
     )
@@ -345,7 +369,55 @@ def _archive_mtimes_key(folder: Path) -> tuple:
     return tuple((p.name, p.stat().st_mtime_ns) for p in files)
 
 
-@st.cache_data(show_spinner=False)
+def _classify_map_points(raw: pd.DataFrame) -> pd.DataFrame:
+    """Fast map categories: full matching only for small samples."""
+    if raw.empty:
+        return raw
+    if len(raw) <= MATCH_ROW_LIMIT:
+        return harmonize_hotspots(raw)
+    # Large Global samples: sensor label only (keeps UI responsive)
+    from src.harmonize import prepare_firms, MODIS_ONLY, VIIRS_ONLY
+
+    prepared = prepare_firms(raw)
+    if prepared.empty:
+        return prepared
+    prepared = prepared.copy()
+    prepared["category"] = prepared["sensor"].map(
+        lambda s: MODIS_ONLY if s == "MODIS" else VIIRS_ONLY
+    )
+    return prepared
+
+
+def _downsample_chart_daily(daily: pd.DataFrame, max_points: int = MAX_CHART_POINTS) -> pd.DataFrame:
+    """Aggregate long series so Plotly never renders thousands of bars."""
+    if daily.empty or len(daily) <= max_points:
+        return daily
+    work = daily.sort_values("period").set_index("period")
+    span_days = max((work.index.max() - work.index.min()).days, 1)
+    if span_days > 700:
+        rule = "MS"  # monthly
+    elif span_days > 180:
+        rule = "W-MON"
+    else:
+        # Even short-but-dense windows: bucket into ~max_points bins
+        rule = f"{max(1, span_days // max_points)}D"
+    agg = {
+        "total": "sum",
+        MATCHED: "sum",
+        MODIS_ONLY: "sum",
+        VIIRS_ONLY: "sum",
+    }
+    agg = {k: v for k, v in agg.items() if k in work.columns}
+    out = work.resample(rule).agg(agg).dropna(how="all").reset_index()
+    positive = out.loc[out["total"] > 0, "total"] if "total" in out.columns else []
+    mean_total = float(positive.mean()) if len(positive) else 0.0
+    out["mean_total"] = mean_total
+    out["threshold"] = mean_total * 2.0
+    out["is_anomaly"] = (out["total"] > out["threshold"]) & (mean_total > 0)
+    return out
+
+
+@st.cache_data(show_spinner=False, max_entries=8, ttl=3600)
 def load_archive_slice(
     folder_str: str,
     mtimes_key: tuple,
@@ -359,7 +431,7 @@ def load_archive_slice(
     """
     Load archive for any region/date span:
     - exact daily activity series (SQL aggregate, full range)
-    - stratified point sample for the map (harmonized)
+    - point sample for the map (fast classify / optional match)
     """
     folder = Path(folder_str)
     daily, daily_stats = load_daily_activity(
@@ -379,11 +451,25 @@ def load_archive_slice(
         max_lat=max_lat,
         start=start_iso,
         end=end_iso,
+        known_total=int(daily_stats.get("total_count") or 0),
     )
-    if raw.empty:
-        harmonized = raw
-    else:
-        harmonized = harmonize_hotspots(raw)
+    harmonized = _classify_map_points(raw)
+    # Keep only columns the UI needs (smaller session / cache payload)
+    keep = [
+        c
+        for c in (
+            "latitude",
+            "longitude",
+            "acq_datetime",
+            "sensor",
+            "category",
+            "confidence",
+            "satellite",
+        )
+        if c in harmonized.columns
+    ]
+    if keep and not harmonized.empty:
+        harmonized = harmonized[keep].copy()
     stats = {**stats, **daily_stats}
     return {
         "raw_rows": int(daily_stats.get("total_count") or len(raw)),
@@ -795,35 +881,39 @@ def render_results(controls: dict) -> None:
             key="chart_focus_slider",
         )
 
-    # Build chart series from exact daily aggregates (not the map sample)
+    # Chart from exact aggregates, downsampled so Plotly stays light
     if daily_focus.empty:
         st.info("Not enough data for the chart.")
     else:
-        chart_daily = daily_focus
-        if freq_choice == "Weekly" and not chart_daily.empty:
+        chart_daily = daily_focus.copy()
+        span_focus = max((focus_end - focus_start).days, 1)
+        # Auto coarsen for long windows (still no selection limits)
+        if freq_choice == "Weekly" or span_focus >= 90:
             tmp = chart_daily.set_index("period").sort_index()
-            weekly = tmp.resample("W-MON").agg(
-                {
-                    "total": "sum",
-                    MATCHED: "sum",
-                    MODIS_ONLY: "sum",
-                    VIIRS_ONLY: "sum",
-                }
-            ).reset_index()
-            positive = weekly.loc[weekly["total"] > 0, "total"]
+            agg = {
+                k: "sum"
+                for k in ("total", MATCHED, MODIS_ONLY, VIIRS_ONLY)
+                if k in tmp.columns
+            }
+            chart_daily = tmp.resample("W-MON").agg(agg).dropna(how="all").reset_index()
+            positive = chart_daily.loc[chart_daily["total"] > 0, "total"]
             mean_total = float(positive.mean()) if len(positive) else 0.0
-            weekly["mean_total"] = mean_total
-            weekly["threshold"] = mean_total * 2.0
-            weekly["is_anomaly"] = (weekly["total"] > weekly["threshold"]) & (
+            chart_daily["mean_total"] = mean_total
+            chart_daily["threshold"] = mean_total * 2.0
+            chart_daily["is_anomaly"] = (chart_daily["total"] > chart_daily["threshold"]) & (
                 mean_total > 0
             )
-            chart_daily = weekly
             freq_label = "Weekly"
         else:
             freq_label = "Daily"
+        chart_daily = _downsample_chart_daily(chart_daily)
 
         ts = chart_daily[
-            [c for c in ("period", MATCHED, MODIS_ONLY, VIIRS_ONLY) if c in chart_daily.columns]
+            [
+                c
+                for c in ("period", MATCHED, MODIS_ONLY, VIIRS_ONLY)
+                if c in chart_daily.columns
+            ]
         ].copy()
         fig = build_activity_chart(
             ts,
@@ -838,7 +928,8 @@ def render_results(controls: dict) -> None:
             config={"displayModeBar": False},
             key="fire_activity",
         )
-    with st.expander("Harmonized table", expanded=False):
+
+    with st.expander("Map sample table", expanded=False):
         show_cols = [
             c
             for c in (
@@ -849,33 +940,19 @@ def render_results(controls: dict) -> None:
                 "satellite",
                 "sensor",
                 "category",
-                "firms_source",
-                "archive_file",
             )
             if c in focused.columns
         ]
-        display = focused[show_cols].sort_values("acq_datetime")
+        display = focused[show_cols].sort_values("acq_datetime").head(5_000)
         st.dataframe(display, use_container_width=True, hide_index=True)
-        st.download_button(
-            "Download CSV",
-            data=display.to_csv(index=False).encode("utf-8"),
-            file_name="harmonized_hotspots.csv",
-            mime="text/csv",
-        )
-
-    if not daily_focus.empty:
-        with st.expander("Daily totals & anomalies", expanded=False):
-            show = daily_focus[
-                ["period", "total", "is_anomaly", "mean_total", "threshold"]
-            ]
-            st.dataframe(show, use_container_width=True, hide_index=True)
 
 
 def run_archive_pipeline(controls: dict) -> str | None:
     """
-    Stream-filter archive CSVs by bbox + dates, harmonize, store in session.
+    Load archive for current region/dates into session.
 
-    Returns a short banner string for the results area, or None on failure.
+    Skips reload when the selection is unchanged (critical: chart slider
+    must not re-query Global data on every drag).
     """
     try:
         region_label, min_lon, min_lat, max_lon, max_lat = resolve_controls_bbox(
@@ -885,18 +962,40 @@ def run_archive_pipeline(controls: dict) -> str | None:
         st.error(str(exc))
         return None
 
+    load_key = (
+        region_label,
+        round(min_lon, 4),
+        round(min_lat, 4),
+        round(max_lon, 4),
+        round(max_lat, 4),
+        controls["start_date"].isoformat(),
+        controls["end_date"].isoformat(),
+        bool(controls.get("compare_mode")),
+        (controls.get("compare_start") or date.min).isoformat()
+        if controls.get("compare_mode")
+        else "",
+        (controls.get("compare_end") or date.min).isoformat()
+        if controls.get("compare_mode")
+        else "",
+    )
+    if (
+        st.session_state.get("archive_load_key") == load_key
+        and st.session_state.get("harmonized") is not None
+        and st.session_state.get("daily_series") is not None
+    ):
+        return None
+
     mtimes = _archive_mtimes_key(DATA_PATH)
     start_iso = controls["start_date"].isoformat()
     end_iso = controls["end_date"].isoformat()
 
-    # One-time DuckDB index; later region/date changes should feel instant
     try:
         _, rebuilt = ensure_hotspots_db(DATA_PATH)
     except ArchiveCsvError as exc:
         st.error(str(exc))
         return None
     if rebuilt:
-        st.toast("Archive index ready — map updates are now instant.")
+        st.toast("Archive index ready.")
 
     try:
         payload = load_archive_slice(
@@ -924,18 +1023,22 @@ def run_archive_pipeline(controls: dict) -> str | None:
     total_count = int(
         stats.get("total_count") or stats.get("rows_scanned") or len(primary)
     )
-    if primary.empty and (daily.empty or int(daily.get("total", pd.Series(dtype=int)).sum()) == 0):
+    if primary.empty and (
+        daily.empty or int(daily.get("total", pd.Series(dtype=int)).sum()) == 0
+    ):
         st.warning("No fires found for this region and date range.")
         st.session_state.harmonized = None
         st.session_state.daily_series = None
+        st.session_state.archive_load_key = None
         st.session_state.comparison = None
         return None
 
     st.session_state.daily_series = daily
+    st.session_state.archive_load_key = load_key
     if stats.get("truncated") and total_count > len(primary):
         st.caption(
-            f"Map shows a representative sample ({len(primary):,} of {total_count:,}). "
-            "Activity chart uses the complete selection."
+            f"Map sample {len(primary):,} of {total_count:,} points — "
+            "chart uses the full selection."
         )
 
     st.session_state.harmonized = primary
@@ -1074,8 +1177,8 @@ def live_archive_explorer(
     archive_date_max: date | None,
 ) -> None:
     """
-    Region/date controls + results in one fragment so changes re-run only
-    this block (near-instant map updates, no full-page reload).
+    Controls + results. Archive data reloads only when region/dates change;
+    chart focus slider only re-filters in memory (no Global re-query).
     """
     controls = render_control_panel(
         "Archive CSV",
@@ -1083,7 +1186,13 @@ def live_archive_explorer(
         archive_date_max=archive_date_max,
     )
     run_archive_pipeline(controls)
-    if st.session_state.harmonized is not None:
+    if (
+        st.session_state.get("harmonized") is not None
+        or (
+            isinstance(st.session_state.get("daily_series"), pd.DataFrame)
+            and not st.session_state.daily_series.empty
+        )
+    ):
         render_results(controls)
 
 
