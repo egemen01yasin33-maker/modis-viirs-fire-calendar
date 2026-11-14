@@ -1,13 +1,14 @@
 """
-Unified Fire Activity Calendar – Harmonized MODIS & VIIRS
+Unified Fire Activity Calendar
 
-NASA Space Apps: FIRMS CSV yükle → 1 km / ±6 saat ile harmonize et →
-Folium harita + günlük/haftalık aktivite grafiği + özet istatistikler.
+NASA Space Apps Challenge 2026 – MODIS ve VIIRS hot spot harmonizasyonu.
+FIRMS Area API'den veri çeker; 1 km / ±6 saat ile eşleştirir; harita ve
+aktivite takviminde gösterir.
+
+MAP_KEY yalnızca istek anında kullanılır; kaydedilmez ve loglanmaz.
 """
 
 from __future__ import annotations
-
-from pathlib import Path
 
 import folium
 import pandas as pd
@@ -15,32 +16,26 @@ import plotly.graph_objects as go
 import streamlit as st
 from streamlit_folium import st_folium
 
+from src.firms_api import (
+    AVAILABLE_SENSORS,
+    PRESET_REGIONS,
+    FirmsApiError,
+    fetch_firms_area,
+)
 from src.harmonize import (
     CATEGORY_COLORS,
     MATCHED,
-    MODIS_ONLY,
-    VIIRS_ONLY,
     activity_timeseries,
     harmonize_hotspots,
     summarize_categories,
     validate_firms_columns,
 )
 
-ROOT = Path(__file__).resolve().parent
-SAMPLE_CSV = ROOT / "data" / "sample_firms.csv"
-
 st.set_page_config(
     page_title="Unified Fire Activity Calendar",
     layout="wide",
     initial_sidebar_state="expanded",
 )
-
-
-def load_csv(uploaded) -> pd.DataFrame:
-    """Yüklenen veya örnek CSV'yi DataFrame olarak okur."""
-    if uploaded is not None:
-        return pd.read_csv(uploaded)
-    return pd.read_csv(SAMPLE_CSV)
 
 
 def build_map(df: pd.DataFrame) -> folium.Map:
@@ -61,10 +56,10 @@ def build_map(df: pd.DataFrame) -> folium.Map:
         for _, row in subset.iterrows():
             popup = (
                 f"<b>{category}</b><br>"
-                f"Sensor: {row['sensor']}<br>"
-                f"Satellite: {row['satellite']}<br>"
-                f"Time: {row['acq_datetime']}<br>"
-                f"Confidence: {row['confidence']}<br>"
+                f"Sensor: {row.get('sensor', '')}<br>"
+                f"Satellite: {row.get('satellite', '')}<br>"
+                f"Time: {row.get('acq_datetime', '')}<br>"
+                f"Confidence: {row.get('confidence', '')}<br>"
                 f"Lat/Lon: {row['latitude']:.4f}, {row['longitude']:.4f}"
             )
             folium.CircleMarker(
@@ -76,7 +71,7 @@ def build_map(df: pd.DataFrame) -> folium.Map:
                 fill_opacity=0.85,
                 weight=1,
                 popup=folium.Popup(popup, max_width=280),
-                tooltip=f"{category} · {row['sensor']}",
+                tooltip=f"{category} · {row.get('sensor', '')}",
             ).add_to(layer)
         layer.add_to(fmap)
 
@@ -111,88 +106,207 @@ def build_activity_chart(ts: pd.DataFrame, freq_label: str) -> go.Figure:
     return fig
 
 
-def main() -> None:
-    st.title("Unified Fire Activity Calendar – Harmonized MODIS & VIIRS")
-    st.markdown(
-        """
-        NASA FIRMS formatındaki MODIS ve VIIRS sıcak noktalarını **1 km** mesafe
-        ve **±6 saat** zaman penceresinde birleştirir. Eşleşenler
-        *Matched (High Confidence)* olarak işaretlenir; tek sensör tespitleri
-        haritada ve takvimde ayrı renklerle gösterilir.
-        """
-    )
-
-    # --- Kenar çubuğu ---
+def render_sidebar() -> dict:
+    """Kenar çubuğu kontrolleri; MAP_KEY yalnızca bellek içi döner."""
     with st.sidebar:
-        st.header("Veri & Ayarlar")
-        uploaded = st.file_uploader(
-            "FIRMS CSV yükle",
-            type=["csv"],
+        st.header("FIRMS Ayarları")
+        # type=password → ekranda gizlenir; diske yazılmaz
+        map_key = st.text_input(
+            "MAP_KEY",
+            type="password",
             help=(
-                "Gerekli sütunlar: latitude, longitude, acq_date, "
-                "acq_time, confidence, satellite"
+                "NASA FIRMS API anahtarı. "
+                "https://firms.modaps.eosdis.nasa.gov/api/ üzerinden alınır. "
+                "Anahtar kaydedilmez ve loglanmaz."
             ),
+            placeholder="FIRMS MAP_KEY girin",
         )
-        use_sample = st.checkbox(
-            "Örnek veriyi kullan",
-            value=uploaded is None,
-            help="Yükleme yoksa Ege/Akdeniz örnek hot spotları yüklenir.",
+
+        st.subheader("Bölge")
+        region_mode = st.radio(
+            "Bölge seçimi",
+            options=("Hazır bölge", "Manuel bbox"),
+            horizontal=True,
         )
-        st.divider()
-        distance_km = st.slider("Mesafe eşiği (km)", 0.5, 5.0, 1.0, 0.1)
-        time_hours = st.slider("Zaman penceresi (± saat)", 1.0, 12.0, 6.0, 0.5)
+
+        if region_mode == "Hazır bölge":
+            region_name = st.selectbox(
+                "Hazır bölgeler",
+                options=list(PRESET_REGIONS.keys()),
+                index=0,
+            )
+            min_lon, min_lat, max_lon, max_lat = PRESET_REGIONS[region_name]
+            st.caption(
+                f"bbox: {min_lon}, {min_lat}, {max_lon}, {max_lat}"
+            )
+        else:
+            region_name = "Manuel"
+            c1, c2 = st.columns(2)
+            with c1:
+                min_lon = st.number_input("min_lon", value=26.0, format="%.4f")
+                min_lat = st.number_input("min_lat", value=36.0, format="%.4f")
+            with c2:
+                max_lon = st.number_input("max_lon", value=30.0, format="%.4f")
+                max_lat = st.number_input("max_lat", value=40.0, format="%.4f")
+
+        sensors = st.multiselect(
+            "Sensörler",
+            options=list(AVAILABLE_SENSORS),
+            default=list(AVAILABLE_SENSORS),
+            help="Birden fazla sensör seçilebilir; sonuçlar birleştirilir.",
+        )
+
+        days = st.slider("Gün sayısı", min_value=1, max_value=10, value=3)
+
         freq_choice = st.radio(
             "Takvim frekansı",
             options=("Günlük", "Haftalık"),
             horizontal=True,
         )
+
+        fetch_clicked = st.button("Veriyi Getir", type="primary", use_container_width=True)
+
+        st.divider()
         st.caption(
             "Kaynak: [NASA FIRMS](https://firms.modaps.eosdis.nasa.gov/) · "
-            "Space Apps – Hot Spot Harmonization"
+            "Space Apps 2026 – Hot Spot Harmonization"
         )
 
-    # --- Veri yükleme ---
-    if uploaded is None and not use_sample:
-        st.info("Başlamak için bir FIRMS CSV yükleyin veya örnek veriyi açın.")
+    return {
+        "map_key": map_key,
+        "region_name": region_name,
+        "min_lon": float(min_lon),
+        "min_lat": float(min_lat),
+        "max_lon": float(max_lon),
+        "max_lat": float(max_lat),
+        "sensors": sensors,
+        "days": int(days),
+        "freq_choice": freq_choice,
+        "fetch_clicked": fetch_clicked,
+    }
+
+
+def main() -> None:
+    st.title("Unified Fire Activity Calendar")
+    st.markdown(
+        """
+        NASA FIRMS **MODIS** ve **VIIRS** sıcak noktalarını canlı olarak çeker;
+        **1 km** mesafe ve **±6 saat** penceresinde birleştirir.
+        Eşleşenler *Matched (High Confidence)*; diğerleri *MODIS-only* /
+        *VIIRS-only* olarak haritada ve takvimde gösterilir.
+        """
+    )
+
+    controls = render_sidebar()
+
+    # Sonuçları oturumda tut (MAP_KEY tutulmaz)
+    if "harmonized" not in st.session_state:
+        st.session_state.harmonized = None
+        st.session_state.last_meta = None
+
+    if controls["fetch_clicked"]:
+        map_key = controls["map_key"]
+        if not (map_key or "").strip():
+            st.error("MAP_KEY gerekli. Kenar çubuğuna FIRMS anahtarınızı girin.")
+            st.session_state.harmonized = None
+        elif not controls["sensors"]:
+            st.error("En az bir sensör seçin.")
+            st.session_state.harmonized = None
+        else:
+            with st.spinner("FIRMS API'den veri getiriliyor…"):
+                try:
+                    # map_key yalnızca bu çağrıya verilir; session_state'e yazılmaz
+                    raw = fetch_firms_area(
+                        map_key=map_key,
+                        sensors=controls["sensors"],
+                        min_lon=controls["min_lon"],
+                        min_lat=controls["min_lat"],
+                        max_lon=controls["max_lon"],
+                        max_lat=controls["max_lat"],
+                        days=controls["days"],
+                    )
+                except FirmsApiError as exc:
+                    st.error(str(exc))
+                    st.session_state.harmonized = None
+                    return
+                except Exception:  # noqa: BLE001 — anahtar sızıntısını önle
+                    st.error(
+                        "Beklenmeyen bir hata oluştu. Bağlantınızı ve "
+                        "parametreleri kontrol edip yeniden deneyin."
+                    )
+                    st.session_state.harmonized = None
+                    return
+
+            if raw.empty:
+                st.warning(
+                    "Seçilen bölge, sensörler ve gün aralığında hot spot bulunamadı. "
+                    "Daha geniş bir bbox veya daha fazla gün deneyin."
+                )
+                st.session_state.harmonized = None
+                return
+
+            missing = validate_firms_columns(raw)
+            if missing:
+                st.error(
+                    "FIRMS yanıtında eksik sütunlar: "
+                    + ", ".join(missing)
+                )
+                st.session_state.harmonized = None
+                return
+
+            with st.spinner("Hot spotlar harmonize ediliyor…"):
+                harmonized = harmonize_hotspots(raw)
+
+            if harmonized.empty:
+                st.warning(
+                    "Geçerli MODIS/VIIRS satırı çıkarılamadı. "
+                    "Yanıttaki satellite / instrument alanlarını kontrol edin."
+                )
+                st.session_state.harmonized = None
+                return
+
+            st.session_state.harmonized = harmonized
+            st.session_state.last_meta = {
+                "region": controls["region_name"],
+                "bbox": (
+                    controls["min_lon"],
+                    controls["min_lat"],
+                    controls["max_lon"],
+                    controls["max_lat"],
+                ),
+                "sensors": list(controls["sensors"]),
+                "days": controls["days"],
+                "raw_rows": int(len(raw)),
+            }
+            # map_key burada bilinçli olarak saklanmıyor
+
+    harmonized = st.session_state.harmonized
+    if harmonized is None:
+        st.info(
+            "Başlamak için kenar çubuğuna **MAP_KEY** girin, bölge ve sensörleri "
+            "seçin, ardından **Veriyi Getir**’e basın."
+        )
+        with st.expander("MAP_KEY nasıl alınır?"):
+            st.markdown(
+                """
+                1. [FIRMS MAP Key](https://firms.modaps.eosdis.nasa.gov/api/key/)
+                   sayfasından ücretsiz anahtar oluşturun.
+                2. Anahtarı kenar çubuğundaki alana yapıştırın (ekranda gizlenir).
+                3. Anahtar bu uygulamada **kaydedilmez** ve loglanmaz.
+                """
+            )
         return
 
-    try:
-        raw = load_csv(uploaded if uploaded is not None else None)
-    except Exception as exc:  # noqa: BLE001 — kullanıcıya göster
-        st.error(f"CSV okunamadı: {exc}")
-        return
-
-    missing = validate_firms_columns(raw)
-    if missing:
-        st.error("Eksik sütunlar: " + ", ".join(missing))
-        st.write("Beklenen sütunlar:", ", ".join(
-            [
-                "latitude",
-                "longitude",
-                "acq_date",
-                "acq_time",
-                "confidence",
-                "satellite",
-            ]
-        ))
-        return
-
-    with st.spinner("Hot spotlar harmonize ediliyor…"):
-        harmonized = harmonize_hotspots(
-            raw,
-            distance_km=distance_km,
-            time_window_hours=time_hours,
+    meta = st.session_state.last_meta or {}
+    if meta:
+        st.caption(
+            f"Bölge: **{meta.get('region', '—')}** · "
+            f"Sensörler: {', '.join(meta.get('sensors', []))} · "
+            f"Son {meta.get('days', '—')} gün · "
+            f"Ham satır: {meta.get('raw_rows', '—')}"
         )
 
-    if harmonized.empty:
-        st.warning(
-            "Geçerli MODIS/VIIRS satırı bulunamadı. "
-            "`satellite` alanının Terra/Aqua (MODIS) veya N/N20/N21 (VIIRS) "
-            "içerdiğinden emin olun."
-        )
-        return
-
-    # --- Tarih aralığı filtresi ---
+    # Tarih aralığı filtresi
     min_d = harmonized["acq_datetime"].min().date()
     max_d = harmonized["acq_datetime"].max().date()
     date_range = st.date_input(
@@ -217,7 +331,7 @@ def main() -> None:
 
     stats = summarize_categories(filtered)
 
-    # --- İstatistikler ---
+    # --- İstatistik kartları ---
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Toplam", stats["total"])
     c2.metric("Matched", stats["matched"])
@@ -226,19 +340,20 @@ def main() -> None:
 
     st.divider()
 
-    # --- Harita + takvim ---
     left, right = st.columns((1.15, 1.0), gap="large")
 
     with left:
         st.subheader("Harmonize Harita")
         st.caption(
-            "Yeşil = Matched (High Confidence) · Turuncu = MODIS-only · Mavi = VIIRS-only"
+            "Yeşil = Matched (High Confidence) · "
+            "Turuncu = MODIS-only · Mavi = VIIRS-only"
         )
         fmap = build_map(filtered)
         st_folium(fmap, width=None, height=480, returned_objects=[])
 
     with right:
         st.subheader("Yangın Aktivitesi Takvimi")
+        freq_choice = controls["freq_choice"]
         freq = "D" if freq_choice == "Günlük" else "W-MON"
         ts = activity_timeseries(
             filtered,
@@ -252,20 +367,23 @@ def main() -> None:
             fig = build_activity_chart(ts, freq_choice)
             st.plotly_chart(fig, use_container_width=True)
 
-    # --- Tablo ---
     with st.expander("Harmonize edilmiş tablo", expanded=False):
         show_cols = [
-            "latitude",
-            "longitude",
-            "acq_datetime",
-            "confidence",
-            "satellite",
-            "sensor",
-            "category",
+            c
+            for c in (
+                "latitude",
+                "longitude",
+                "acq_datetime",
+                "confidence",
+                "satellite",
+                "sensor",
+                "category",
+                "firms_source",
+            )
+            if c in filtered.columns
         ]
         display = filtered[show_cols].sort_values("acq_datetime")
         st.dataframe(display, use_container_width=True, hide_index=True)
-
         csv_bytes = display.to_csv(index=False).encode("utf-8")
         st.download_button(
             "CSV indir",

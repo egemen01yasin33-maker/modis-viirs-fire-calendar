@@ -1,14 +1,21 @@
-# Unified Fire Activity Calendar – Harmonized MODIS & VIIRS
+# Unified Fire Activity Calendar
 
-NASA Space Apps challenge uygulaması: FIRMS formatındaki MODIS ve VIIRS sıcak noktalarını (hot spots) **1 km** mesafe ve **±6 saat** zaman penceresinde harmonize eder, haritada ve aktivite takviminde gösterir.
+NASA Space Apps Challenge 2026 – MODIS ve VIIRS hot spot harmonizasyonu.
+
+Uygulama, [NASA FIRMS Area API](https://firms.modaps.eosdis.nasa.gov/api/) üzerinden
+canlı sıcak nokta verisi çeker; **1 km** mesafe ve **±6 saat** zaman penceresinde
+MODIS ↔ VIIRS eşleşmelerini *Matched (High Confidence)* olarak işaretler.
 
 ## Özellikler
 
-1. **FIRMS CSV yükleme** — `latitude`, `longitude`, `acq_date`, `acq_time`, `confidence`, `satellite`
-2. **Harmonizasyon** — eşleşen MODIS+VIIRS → *Matched (High Confidence)*; tek sensör → *MODIS-only* / *VIIRS-only*
-3. **Folium harita** — yeşil / turuncu / mavi
-4. **Yangın aktivitesi takvimi** — günlük veya haftalık çizgi grafik
-5. **Özet istatistikler** — toplam, matched, MODIS-only, VIIRS-only
+1. **MAP_KEY** — kenar çubuğunda parola alanı; kaydedilmez, loglanmaz
+2. **Bölge** — Türkiye, Akdeniz, Ege, İç Anadolu veya manuel bbox
+3. **Sensörler** — `MODIS_NRT`, `VIIRS_NOAA20_NRT`, `VIIRS_NOAA21_NRT` (çoklu)
+4. **Gün sayısı** — 1–10 slider
+5. **Harmonizasyon** — Matched / MODIS-only / VIIRS-only
+6. **Folium harita** — yeşil / turuncu / mavi
+7. **Yangın aktivitesi takvimi** — günlük veya haftalık Plotly grafik
+8. **İstatistik kartları** — toplam, matched, MODIS-only, VIIRS-only
 
 ## Çalıştırma
 
@@ -19,41 +26,44 @@ pip install -r requirements.txt
 streamlit run app.py --server.port 8529
 ```
 
-Tarayıcıda açılan arayüzde örnek veriyi kullanabilir veya kendi FIRMS CSV’nizi yükleyebilirsiniz.
+1. [FIRMS MAP Key](https://firms.modaps.eosdis.nasa.gov/api/key/) alın.
+2. Kenar çubuğuna yapıştırın, bölge/sensör/gün seçin.
+3. **Veriyi Getir**’e basın.
 
 ## Proje yapısı
 
 ```
 app.py                 # Streamlit arayüzü
-src/harmonize.py       # Mesafe/zaman eşleme mantığı
-data/sample_firms.csv  # Örnek hot spotlar
+src/firms_api.py       # FIRMS Area API istemcisi
+src/harmonize.py       # Mesafe/zaman eşleme
+data/sample_firms.csv  # Harmonizasyon birim testleri için örnek
 requirements.txt
+```
+
+## API
+
+```
+https://firms.modaps.eosdis.nasa.gov/api/area/csv/{MAP_KEY}/{SENSOR}/{min_lon},{min_lat},{max_lon},{max_lat}/{days}
 ```
 
 ## Harmonizasyon kuralı
 
-Bir MODIS noktası ile bir VIIRS noktası şu koşulların ikisini de sağlarsa *Matched (High Confidence)* olur:
+Bir MODIS ile bir VIIRS noktası şu koşulların ikisini de sağlarsa *Matched* olur:
 
-- Haversine mesafe ≤ 1 km (kenar çubuğundan değiştirilebilir)
+- Haversine mesafe ≤ 1 km
 - `|acq_datetime_MODIS − acq_datetime_VIIRS|` ≤ 6 saat
 
-Eşleme açgözlüdür: her MODIS için zaman penceresindeki en yakın, henüz eşleşmemiş VIIRS seçilir.
-
-## Uydu tanıma
-
-| Sensör | Örnek `satellite` değerleri      |
-|--------|----------------------------------|
-| MODIS  | Terra, Aqua, MODIS               |
-| VIIRS  | N, N20, N21, NOAA-20, Suomi NPP  |
-
-İsteğe bağlı `instrument` sütunu da okunur.
+Eşleme açgözlüdür: her MODIS için zaman penceresindeki en yakın, henüz
+eşleşmemiş VIIRS seçilir.
 
 ## Testler
 
 ```bash
 python tests/test_harmonize.py
+python tests/test_firms_api.py
 ```
 
-## Veri kaynağı
+## Güvenlik notu
 
-[NASA FIRMS](https://firms.modaps.eosdis.nasa.gov/) — Fire Information for Resource Management System.
+`MAP_KEY` yalnızca istek anında kullanılır; `session_state`’e yazılmaz,
+dosyaya kaydedilmez ve hata mesajlarında gösterilmez.
