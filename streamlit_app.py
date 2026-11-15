@@ -1,8 +1,3 @@
-import streamlit as st
-st.title("Test - App is running")
-st.write("If you see this, the app started successfully.")
-st.stop()
-
 """
 Unified Fire Activity Calendar
 
@@ -13,6 +8,12 @@ FIRMS_MAP_KEY is loaded from .env for NRT mode only.
 """
 
 from __future__ import annotations
+
+import streamlit as st
+
+st.title("Test - App is running")
+st.write("If you see this, the app started successfully.")
+st.stop()
 
 import os
 import time
