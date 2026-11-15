@@ -24,10 +24,9 @@ DATA_DIRNAME = "data"
 CACHE_DIRNAME = "_cache"
 DB_FILENAME = "fires.duckdb"
 CHUNK_SIZE = 250_000
-# Map sample size — charts use full-range SQL aggregates instead.
-# Keep this modest: Plotly/browser freezes above a few thousand markers.
-# Spatial sampling (not random) preserves sparse regions like Turkey.
-MAX_FILTERED_ROWS = 6_000
+# Map load budget — show every point below this; above it, priority-sample.
+# Charts still use full-range SQL aggregates (exact totals).
+MAX_FILTERED_ROWS = 80_000
 # Tiny fixtures kept in data/ for unit tests — skip in Archive mode inventory
 SKIP_FILENAMES = frozenset({"sample_firms.csv"})
 # Columns needed for harmonization + map (keep the query narrow/fast)
@@ -490,7 +489,9 @@ def _load_filtered_duckdb(
     select_sql = """
         latitude, longitude,
         CAST(acq_date AS VARCHAR) AS acq_date,
-        acq_time, satellite, instrument, confidence, archive_file
+        acq_time, satellite, instrument, confidence,
+        coalesce(frp, 0)::DOUBLE AS frp,
+        archive_file
     """
     where_sql = """
         acq_date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
@@ -512,6 +513,7 @@ def _load_filtered_duckdb(
         if total_n == 0:
             df = pd.DataFrame()
         elif total_n <= max_rows:
+            # Below the threshold: return every fire in the selection.
             df = con.execute(
                 f"""
                 SELECT {select_sql}
@@ -520,50 +522,38 @@ def _load_filtered_duckdb(
                 """,
                 where_params,
             ).df()
-        elif total_n <= max_rows * 4:
-            # Moderate oversize (e.g. a few Global days): proportional hash
-            # sample so sparse regions keep a fair share of the budget.
-            modulus = 10_000
-            threshold = max(1, int(modulus * (max_rows / total_n)) + 50)
-            df = con.execute(
+        else:
+            # Above threshold: ~half highest-FRP, ~half spatial coverage
+            # (still capped at max_rows). Matched ranking happens after classify.
+            n_frp = max(max_rows // 2, 1)
+            n_grid = max(max_rows - n_frp, 1)
+            cell, per_cell = _map_sample_grid(
+                min_lon, min_lat, max_lon, max_lat, total_n, n_grid
+            )
+            top = con.execute(
                 f"""
                 SELECT {select_sql}
                 FROM hotspots
                 WHERE {where_sql}
-                  AND (abs(hash(latitude, longitude, acq_time)) % ?) < ?
-                ORDER BY hash(latitude * 1000, longitude * 1000)
+                ORDER BY coalesce(frp, 0) DESC NULLS LAST
                 LIMIT ?
                 """,
-                [*where_params, modulus, threshold, max_rows],
+                [*where_params, n_frp],
             ).df()
-            if len(df) < min(max_rows // 5, 2_000):
-                df = con.execute(
-                    f"""
-                    SELECT {select_sql}
-                    FROM hotspots
-                    WHERE {where_sql}
-                    LIMIT ?
-                    """,
-                    [*where_params, max_rows],
-                ).df()
-        else:
-            # Huge windows: fine spatial grid + several points per cell,
-            # shuffled before LIMIT so west-sorted storage does not bias.
-            cell, per_cell = _map_sample_grid(
-                min_lon, min_lat, max_lon, max_lat, total_n, max_rows
-            )
-            df = con.execute(
+            grid = con.execute(
                 f"""
                 SELECT {select_sql}
                 FROM (
                   SELECT
                     latitude, longitude, acq_date, acq_time, satellite,
-                    instrument, confidence, archive_file,
+                    instrument, confidence, coalesce(frp, 0)::DOUBLE AS frp,
+                    archive_file,
                     ROW_NUMBER() OVER (
                       PARTITION BY
                         CAST(floor(latitude / ?) AS INTEGER),
                         CAST(floor(longitude / ?) AS INTEGER)
-                      ORDER BY hash(acq_time, satellite, latitude)
+                      ORDER BY coalesce(frp, 0) DESC NULLS LAST,
+                               hash(acq_time, satellite)
                     ) AS rn
                   FROM hotspots
                   WHERE {where_sql}
@@ -572,14 +562,60 @@ def _load_filtered_duckdb(
                 ORDER BY hash(latitude * 1000, longitude * 1000)
                 LIMIT ?
                 """,
-                [cell, cell, *where_params, per_cell, max_rows],
+                [cell, cell, *where_params, per_cell, n_grid],
             ).df()
+            if top.empty and grid.empty:
+                df = pd.DataFrame()
+            else:
+                df = (
+                    pd.concat([top, grid], ignore_index=True)
+                    .drop_duplicates(
+                        subset=[
+                            "latitude",
+                            "longitude",
+                            "acq_date",
+                            "acq_time",
+                            "satellite",
+                        ],
+                        keep="first",
+                    )
+                )
+                # Fill remaining budget with next-highest FRP rows
+                if len(df) < max_rows:
+                    more = con.execute(
+                        f"""
+                        SELECT {select_sql}
+                        FROM hotspots
+                        WHERE {where_sql}
+                        ORDER BY coalesce(frp, 0) DESC NULLS LAST
+                        LIMIT ?
+                        """,
+                        [*where_params, max_rows],
+                    ).df()
+                    df = (
+                        pd.concat([df, more], ignore_index=True)
+                        .drop_duplicates(
+                            subset=[
+                                "latitude",
+                                "longitude",
+                                "acq_date",
+                                "acq_time",
+                                "satellite",
+                            ],
+                            keep="first",
+                        )
+                    )
+                if "frp" in df.columns:
+                    df = df.sort_values("frp", ascending=False, na_position="last")
+                if len(df) > max_rows:
+                    df = df.iloc[:max_rows].copy()
             if len(df) < min(max_rows // 5, 2_000):
                 df = con.execute(
                     f"""
                     SELECT {select_sql}
                     FROM hotspots
                     WHERE {where_sql}
+                    ORDER BY coalesce(frp, 0) DESC NULLS LAST
                     LIMIT ?
                     """,
                     [*where_params, max_rows],

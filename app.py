@@ -116,63 +116,83 @@ def _is_wide_bbox(
     return (max_lon - min_lon) >= 120 or (max_lat - min_lat) >= 100
 
 
-# Hard caps — browsers freeze well before DuckDB does.
-MAX_MAP_POINTS_GLOBAL = 1_500
-MAX_MAP_POINTS_REGIONAL = 2_800
-MAX_MAP_LOAD_GLOBAL = 4_000
-MAX_MAP_LOAD_REGIONAL = 6_000
+# Show every fire below this count; above it, priority-sample (Matched + high FRP).
+MAP_FULL_THRESHOLD = 80_000
+MAX_MAP_POINTS = MAP_FULL_THRESHOLD
+MAX_MAP_LOAD = MAP_FULL_THRESHOLD
 MAX_CHART_ANOMALIES = 15
 MAX_CHART_POINTS = 180
 # Skip expensive MODIS↔VIIRS matching above this map-sample size
-MATCH_ROW_LIMIT = 8_000
+MATCH_ROW_LIMIT = 20_000
 
 
-def _map_point_limit(bbox: tuple[float, float, float, float] | None) -> int:
-    return MAX_MAP_POINTS_GLOBAL if _is_wide_bbox(bbox) else MAX_MAP_POINTS_REGIONAL
+def _map_point_limit(bbox: tuple[float, float, float, float] | None = None) -> int:
+    return MAX_MAP_POINTS
 
 
-def _map_load_budget(bbox: tuple[float, float, float, float] | None) -> int:
-    return MAX_MAP_LOAD_GLOBAL if _is_wide_bbox(bbox) else MAX_MAP_LOAD_REGIONAL
+def _map_load_budget(bbox: tuple[float, float, float, float] | None = None) -> int:
+    return MAX_MAP_LOAD
 
 
 def _sample_for_map(
     df: pd.DataFrame,
-    limit: int = MAX_MAP_POINTS_GLOBAL,
+    limit: int = MAX_MAP_POINTS,
 ) -> pd.DataFrame:
     """
-    Keep the map responsive while preserving geography.
+    Keep every point at or under the threshold.
 
-    Random category sampling erased sparse regions (e.g. Turkey) on Global
-    views. Grid-binning keeps at least one point per cell before filling.
+    Above the limit: keep Matched and high-FRP first, then fill with a
+    spatial grid so sparse regions are not erased.
     """
     if df is None or df.empty or len(df) <= limit:
         return df if df is not None else pd.DataFrame()
-    work = df[["latitude", "longitude", "category"]].copy()
-    lon_span = float(work["longitude"].max() - work["longitude"].min()) + 1e-6
-    lat_span = float(work["latitude"].max() - work["latitude"].min()) + 1e-6
-    area = lon_span * lat_span
-    cell = max(0.2, min((area / max(limit, 1)) ** 0.5, 2.0))
-    work["_gx"] = (work["longitude"] / cell).floordiv(1).astype("int32")
-    work["_gy"] = (work["latitude"] / cell).floordiv(1).astype("int32")
-    work["_pref"] = (work["category"] == MATCHED).astype("int8")
-    work = work.sort_values(
-        ["_gx", "_gy", "_pref"],
-        ascending=[True, True, False],
+
+    cols = [c for c in ("latitude", "longitude", "category", "frp") if c in df.columns]
+    work = df[cols].copy()
+    work["_frp"] = pd.to_numeric(work["frp"], errors="coerce").fillna(0.0) if "frp" in work.columns else 0.0
+    work["_matched"] = (work["category"] == MATCHED).astype("int8") if "category" in work.columns else 0
+
+    # 1) Priority pool: Matched first, then highest FRP
+    priority_n = max(int(limit * 0.7), 1)
+    priority = work.sort_values(
+        ["_matched", "_frp"],
+        ascending=[False, False],
         kind="mergesort",
-    )
-    spaced = work.groupby(["_gx", "_gy"], sort=False, as_index=False).head(1)
-    if len(spaced) >= limit:
-        out = spaced.sample(n=limit, random_state=42)
-    else:
-        leftover = work.loc[~work.index.isin(spaced.index)]
-        need = limit - len(spaced)
-        extra = (
-            leftover.sample(n=min(need, len(leftover)), random_state=42)
-            if need and not leftover.empty
-            else leftover.iloc[0:0]
+    ).head(priority_n)
+
+    # 2) Spatial fill from the remainder for geographic coverage
+    leftover = work.loc[~work.index.isin(priority.index)]
+    need = limit - len(priority)
+    if need > 0 and not leftover.empty:
+        lon_span = float(leftover["longitude"].max() - leftover["longitude"].min()) + 1e-6
+        lat_span = float(leftover["latitude"].max() - leftover["latitude"].min()) + 1e-6
+        area = lon_span * lat_span
+        cell = max(0.2, min((area / max(need, 1)) ** 0.5, 2.0))
+        leftover = leftover.copy()
+        leftover["_gx"] = (leftover["longitude"] / cell).floordiv(1).astype("int32")
+        leftover["_gy"] = (leftover["latitude"] / cell).floordiv(1).astype("int32")
+        leftover = leftover.sort_values(
+            ["_matched", "_frp"],
+            ascending=[False, False],
+            kind="mergesort",
         )
-        out = pd.concat([spaced, extra], ignore_index=True)
-    return out.drop(columns=["_gx", "_gy", "_pref"], errors="ignore")
+        spaced = leftover.groupby(["_gx", "_gy"], sort=False, as_index=False).head(1)
+        if len(spaced) >= need:
+            extra = spaced.head(need)
+        else:
+            rest = leftover.loc[~leftover.index.isin(spaced.index)]
+            fill = rest.head(need - len(spaced))
+            extra = pd.concat([spaced, fill], ignore_index=False)
+        out = pd.concat([priority, extra], ignore_index=True)
+    else:
+        out = priority
+
+    if len(out) > limit:
+        out = out.head(limit)
+    return out.drop(
+        columns=["_frp", "_matched", "_gx", "_gy"],
+        errors="ignore",
+    )
 
 
 def build_map_figure(
@@ -180,7 +200,7 @@ def build_map_figure(
     bbox: tuple[float, float, float, float] | None = None,
 ) -> go.Figure:
     """
-    Lightweight map: few thousand markers, no hover payloads, no tile wrap.
+    Map markers without tile wrap. Shows all points up to MAP_FULL_THRESHOLD.
 
     Wide / Global → Scattergeo (Natural Earth). Regional → OSM with bounds.
     """
@@ -222,6 +242,16 @@ def build_map_figure(
     # Draw rarer categories last so they stay visible on top
     draw_order = [VIIRS_ONLY, MODIS_ONLY, MATCHED]
     wide = _is_wide_bbox((min_lon, min_lat, max_lon, max_lat))
+    n_pts = int(len(plot_df))
+    # Shrink markers as density grows so 10k–80k stays readable
+    if n_pts > 40_000:
+        geo_size, map_size, opacity = 2, 3, 0.55
+    elif n_pts > 12_000:
+        geo_size, map_size, opacity = 2, 4, 0.65
+    elif n_pts > 3_000:
+        geo_size, map_size, opacity = 3, 5, 0.75
+    else:
+        geo_size, map_size, opacity = 4, 6, 0.85
 
     if wide:
         for cat in draw_order:
@@ -236,8 +266,8 @@ def build_map_figure(
                     name=cat,
                     hoverinfo="skip",
                     marker=dict(
-                        size=3,
-                        opacity=0.75,
+                        size=geo_size,
+                        opacity=opacity,
                         color=CATEGORY_COLORS.get(cat, "#ffffff"),
                         line=dict(width=0),
                     ),
@@ -293,8 +323,8 @@ def build_map_figure(
                 name=cat,
                 hoverinfo="skip",
                 marker=dict(
-                    size=6,
-                    opacity=0.8,
+                    size=map_size,
+                    opacity=opacity,
                     color=CATEGORY_COLORS.get(cat, "#ffffff"),
                 ),
             )
@@ -713,14 +743,14 @@ def load_map_slice(
     start_iso: str,
     end_iso: str,
     known_total: int = 0,
-    max_rows: int = MAX_MAP_LOAD_REGIONAL,
+    max_rows: int = MAX_MAP_LOAD,
 ) -> dict:
     """
-    Geographic grid sample of fire points for the map.
+    Fire points for the map focus window.
 
-    Call with the *focus* date window (not the full sidebar range) so
-    narrowing the slider reloads real fires for those days — not a thin
-    filter of a year-wide random sample.
+    Loads every row when the selection is under MAP_FULL_THRESHOLD;
+    otherwise priority-samples (high FRP + spatial coverage), then
+    ranks Matched + high FRP for display.
     """
     folder = Path(folder_str)
     raw, names, stats = load_filtered_csvs(
@@ -734,9 +764,23 @@ def load_map_slice(
         max_rows=int(max_rows),
         known_total=known_total or None,
     )
-    # Keep map payload small; confidence stays for quality scoring
     harmonized = _classify_map_points(raw)
     if not harmonized.empty:
+        # Carry FRP through classify when present on the raw frame
+        if "frp" in raw.columns and "frp" not in harmonized.columns:
+            # Align by position after prepare_firms may drop rows — merge on coords/time when possible
+            harmonized = harmonized.copy()
+            if len(harmonized) == len(raw):
+                harmonized["frp"] = pd.to_numeric(raw["frp"], errors="coerce")
+            elif {"latitude", "longitude"}.issubset(raw.columns):
+                frp_lookup = raw[["latitude", "longitude"]].copy()
+                frp_lookup["frp"] = pd.to_numeric(raw["frp"], errors="coerce")
+                frp_lookup = frp_lookup.drop_duplicates(
+                    subset=["latitude", "longitude"], keep="first"
+                )
+                harmonized = harmonized.merge(
+                    frp_lookup, on=["latitude", "longitude"], how="left"
+                )
         cols = [
             c
             for c in (
@@ -745,6 +789,7 @@ def load_map_slice(
                 "category",
                 "acq_datetime",
                 "confidence",
+                "frp",
             )
             if c in harmonized.columns
         ]
@@ -1133,14 +1178,14 @@ def render_map_focus_panel(
 
     map_n = int(len(focused)) if focused is not None else 0
     scanned_n = int(map_stats.get("rows_scanned") or exact_total or map_n)
+    truncated = bool(map_stats.get("truncated")) or scanned_n > MAP_FULL_THRESHOLD
     plotted = min(map_n, _map_point_limit(bbox))
-    if scanned_n > plotted > 0:
+    if plotted:
         st.caption(
-            f"Plotting {plotted:,} of {scanned_n:,} fires in focus "
-            f"({cur_start} → {cur_end}). Chart totals stay exact."
+            f"{plotted:,} fires on the map for {cur_start} → {cur_end}"
+            + (f" (of {scanned_n:,} in focus)" if scanned_n > plotted else "")
+            + "."
         )
-    elif plotted:
-        st.caption(f"{plotted:,} fires mapped for {cur_start} → {cur_end}.")
 
     map_fig = build_map_figure(
         focused if focused is not None else pd.DataFrame(),
@@ -1156,6 +1201,10 @@ def render_map_focus_panel(
         },
         key="fire_map",
     )
+    if truncated:
+        st.caption(
+            "Map displays a performance sample. Full statistics are shown above."
+        )
 
     with st.expander("Map sample table", expanded=False):
         if focused is None or focused.empty:
