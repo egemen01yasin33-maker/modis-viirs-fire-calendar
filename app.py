@@ -1067,11 +1067,11 @@ def render_control_panel(
     compare_mode = False
     if source_mode == "Archive CSV" and nrt_compare_available:
         compare_mode = st.toggle(
-            "Compare with live FIRMS (last 5–10 days)",
+            "Compare with live FIRMS",
             value=True,
             help=(
-                "Uses your uploaded archive for the selected dates, then "
-                "fetches the recent NRT window your MAP_KEY allows."
+                "Uses your uploaded archive for Archive dates, then fetches "
+                f"the Live dates window (max {MAX_DAY_RANGE} days) via MAP_KEY."
             ),
         )
         compare_source = "nrt" if compare_mode else "none"
@@ -1158,19 +1158,36 @@ def render_control_panel(
             start_date, end_date = _parse_date_range(primary_range, default_end)
 
             if compare_source == "nrt":
-                live_days = st.slider(
-                    "Live window (days)",
-                    min_value=5,
-                    max_value=MAX_DAY_RANGE,
-                    value=MAX_DAY_RANGE,
-                    key="archive_nrt_window_days",
-                    help="FIRMS NRT: last N days ending today (max 10).",
+                # Pick the live NRT window with the same date control style
+                # as Archive dates (not a separate "days" slider).
+                live_default_end = today
+                live_default_start = today - timedelta(days=min(5, MAX_DAY_RANGE) - 1)
+                live_range = st.date_input(
+                    "Live dates (MAP_KEY)",
+                    value=(live_default_start, live_default_end),
+                    min_value=nrt_min,
+                    max_value=today,
+                    key="archive_nrt_live_dates",
+                    help=(
+                        "Select the live FIRMS window here (max "
+                        f"{MAX_DAY_RANGE} days). Same date picker as Archive dates."
+                    ),
                 )
-                compare_start, compare_end = _nrt_window_from_end(today, live_days)
-                st.caption(
-                    f"Live compare: **{compare_start} → {compare_end}** "
-                    f"({live_days} days via MAP_KEY)."
+                compare_start, compare_end = _parse_date_range(
+                    live_range, live_default_end
                 )
+                span = (compare_end - compare_start).days + 1
+                if span > MAX_DAY_RANGE:
+                    compare_start = compare_end - timedelta(days=MAX_DAY_RANGE - 1)
+                    st.caption(
+                        f"NRT limit: clipped to **{compare_start} → {compare_end}** "
+                        f"({MAX_DAY_RANGE} days)."
+                    )
+                else:
+                    st.caption(
+                        f"Live compare: **{compare_start} → {compare_end}** "
+                        f"({span} day{'s' if span != 1 else ''} via MAP_KEY)."
+                    )
             elif compare_source == "archive":
                 compare_range = st.date_input(
                     "Compare with",
