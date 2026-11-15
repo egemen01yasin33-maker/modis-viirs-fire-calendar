@@ -9,12 +9,6 @@ FIRMS_MAP_KEY is loaded from .env for NRT mode only.
 
 from __future__ import annotations
 
-import streamlit as st
-
-st.title("Test - App is running")
-st.write("If you see this, the app started successfully.")
-st.stop()
-
 import os
 import time
 from datetime import date, timedelta
@@ -23,6 +17,7 @@ from pathlib import Path
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+import streamlit as st
 from dotenv import load_dotenv
 
 from src.analytics import (
