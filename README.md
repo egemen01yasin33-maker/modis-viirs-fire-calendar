@@ -34,12 +34,18 @@ streamlit run streamlit_app.py --server.port 8529
 
 ### Archive CSVs
 
-Place NASA FIRMS Archive CSVs in `data/` (gitignored except the sample). Example:
+Place NASA FIRMS Archive CSVs in `data/` (gitignored except the sample).
 
-- `archive_modis_terra_aqua.csv`
-- `archive_viirs_noaa20.csv`
-- `archive_viirs_noaa21.csv`
-- `archive_viirs_snpp.csv`
+**Full dataset (~6.5 GB, MODIS + VIIRS)** is on a GitHub Release (not in git):
+
+- Release: https://github.com/egemen01yasin33-maker/modis-viirs-fire-calendar/releases/tag/archive-data-v1
+- Download:
+
+```bash
+bash scripts/download_archives.sh
+# or:
+gh release download archive-data-v1 -R egemen01yasin33-maker/modis-viirs-fire-calendar -D data
+```
 
 Required columns: `latitude`, `longitude`, `acq_date`, `acq_time`,
 `confidence`, `satellite`.
