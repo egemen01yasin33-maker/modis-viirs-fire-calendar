@@ -465,6 +465,14 @@ def build_activity_chart(
     *,
     focus_start: date | None = None,
     focus_end: date | None = None,
+    show_categories: bool = True,
+    show_total: bool = True,
+    show_frp: bool = True,
+    show_mean: bool = True,
+    show_rolling: bool = True,
+    show_anomalies: bool = True,
+    chart_style: str = "Auto",
+    y_log: bool = False,
 ) -> go.Figure:
     """Lightweight stacked activity chart (no heavy rangeslider / marker spam)."""
     fig = go.Figure()
@@ -518,71 +526,84 @@ def build_activity_chart(
         cat_cols = [c for c in CATEGORY_COLORS if c in work.columns]
         work["total"] = work[cat_cols].sum(axis=1) if cat_cols else 0
 
-    # Prefer lines for long series (bars freeze the browser); bars only for short windows
-    use_bars = len(work) <= 60
-    if use_bars:
-        for col, color in CATEGORY_COLORS.items():
-            if col not in work.columns:
-                continue
-            fig.add_trace(
-                go.Bar(
-                    x=work["period"],
-                    y=work[col],
-                    name=col,
-                    marker_color=color,
-                    opacity=0.9,
-                    hovertemplate="%{x|%Y-%m-%d}<br>"
-                    + col
-                    + ": %{y:,}<extra></extra>",
-                )
-            )
+    if chart_style == "Bars":
+        use_bars = True
+    elif chart_style == "Lines":
+        use_bars = False
     else:
-        for col, color in CATEGORY_COLORS.items():
-            if col not in work.columns:
-                continue
-            fig.add_trace(
-                go.Scatter(
-                    x=work["period"],
-                    y=work[col],
-                    mode="lines",
-                    name=col,
-                    line=dict(color=color, width=1.6),
-                    hovertemplate="%{x|%Y-%m-%d}<br>"
-                    + col
-                    + ": %{y:,}<extra></extra>",
-                )
-            )
+        # Auto: bars for short windows; lines for long series (bars freeze browser)
+        use_bars = len(work) <= 60
 
-    fig.add_trace(
-        go.Scatter(
-            x=work["period"],
-            y=work["total"],
-            mode="lines",
-            name="Total",
-            line=dict(color="#ffffff", width=2.4),
-            hovertemplate="%{x|%Y-%m-%d}<br>Total: %{y:,}<extra></extra>",
+    if show_categories:
+        if use_bars:
+            for col, color in CATEGORY_COLORS.items():
+                if col not in work.columns:
+                    continue
+                fig.add_trace(
+                    go.Bar(
+                        x=work["period"],
+                        y=work[col],
+                        name=col,
+                        marker_color=color,
+                        opacity=0.9,
+                        hovertemplate="%{x|%Y-%m-%d}<br>"
+                        + col
+                        + ": %{y:,}<extra></extra>",
+                    )
+                )
+        else:
+            for col, color in CATEGORY_COLORS.items():
+                if col not in work.columns:
+                    continue
+                fig.add_trace(
+                    go.Scatter(
+                        x=work["period"],
+                        y=work[col],
+                        mode="lines",
+                        name=col,
+                        line=dict(color=color, width=1.6),
+                        hovertemplate="%{x|%Y-%m-%d}<br>"
+                        + col
+                        + ": %{y:,}<extra></extra>",
+                    )
+                )
+
+    if show_total:
+        fig.add_trace(
+            go.Scatter(
+                x=work["period"],
+                y=work["total"],
+                mode="lines",
+                name="Total",
+                line=dict(color="#ffffff", width=2.4),
+                hovertemplate="%{x|%Y-%m-%d}<br>Total: %{y:,}<extra></extra>",
+            )
         )
-    )
 
     window = 7 if freq_label == "Daily" else 4
-    if len(work) >= max(3, window // 2):
+    if show_rolling and len(work) >= max(3, window // 2):
         roll = (
             work.set_index("period")["total"]
             .rolling(window=min(window, len(work)), min_periods=1)
             .mean()
+        )
+        roll_name = (
+            f"{window}-day average"
+            if freq_label == "Daily"
+            else f"{window}-period average"
         )
         fig.add_trace(
             go.Scatter(
                 x=roll.index,
                 y=roll.values,
                 mode="lines",
-                name=f"{window}-day average",
+                name=roll_name,
                 line=dict(color="#7df9ff", width=2, dash="dash"),
                 hovertemplate="%{x|%Y-%m-%d}<br>Avg: %{y:.0f}<extra></extra>",
             )
         )
 
-    if "mean_total" in work.columns and len(work):
+    if show_mean and "mean_total" in work.columns and len(work):
         mean_v = float(work["mean_total"].iloc[0])
         if mean_v > 0:
             fig.add_hline(
@@ -593,7 +614,7 @@ def build_activity_chart(
                 annotation_position="top left",
             )
 
-    if "is_anomaly" in work.columns:
+    if show_anomalies and "is_anomaly" in work.columns:
         anomalies = work[work["is_anomaly"]].nlargest(
             MAX_CHART_ANOMALIES, "total"
         )
@@ -614,7 +635,11 @@ def build_activity_chart(
                 )
             )
 
-    has_frp = "frp_sum" in work.columns and float(work["frp_sum"].fillna(0).sum()) > 0
+    has_frp = (
+        show_frp
+        and "frp_sum" in work.columns
+        and float(work["frp_sum"].fillna(0).sum()) > 0
+    )
     if has_frp:
         fig.add_trace(
             go.Scatter(
@@ -647,6 +672,7 @@ def build_activity_chart(
             showgrid=True,
             gridcolor="rgba(255,255,255,0.08)",
             rangemode="tozero",
+            type="log" if y_log else "linear",
         ),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0, title_text=""),
         hovermode="x unified",
@@ -667,9 +693,126 @@ def build_activity_chart(
             showgrid=False,
             rangemode="tozero",
             tickfont=dict(color="#fbbf24"),
+            type="log" if y_log else "linear",
         )
     fig.update_layout(**layout_kwargs)
     return fig
+
+
+def render_chart_control_panel(
+    *,
+    start: date,
+    end: date,
+    data_key: tuple,
+) -> dict:
+    """
+    Chart controls: aggregation, style, and which series to show.
+
+    Keeps focus slider in sync with the map via session chart_focus.
+    """
+    span_days = max((end - start).days, 0)
+    with st.expander("Chart controls", expanded=True):
+        r1c1, r1c2, r1c3 = st.columns(3)
+        with r1c1:
+            if span_days >= 365:
+                detail_opts = ("Monthly", "Weekly", "Daily")
+                default_idx = 0
+            elif span_days >= 90:
+                detail_opts = ("Weekly", "Daily", "Monthly")
+                default_idx = 0
+            else:
+                detail_opts = ("Daily", "Weekly", "Monthly")
+                default_idx = 0
+            freq_choice = st.radio(
+                "Aggregation",
+                options=detail_opts,
+                horizontal=True,
+                index=default_idx,
+                key="chart_freq_v3",
+                help="How to bucket hotspots on the X axis.",
+            )
+        with r1c2:
+            chart_style = st.radio(
+                "Style",
+                options=("Auto", "Bars", "Lines"),
+                horizontal=True,
+                index=0,
+                key="chart_style_v1",
+                help="Auto uses bars for short windows and lines for long ones.",
+            )
+        with r1c3:
+            y_log = st.toggle(
+                "Log scale",
+                value=False,
+                key="chart_ylog_v1",
+                help="Useful when a few days dwarf the rest of the series.",
+            )
+
+        st.caption("Series")
+        s1, s2, s3, s4 = st.columns(4)
+        with s1:
+            show_total = st.checkbox("Total", value=True, key="chart_show_total")
+            show_categories = st.checkbox(
+                "MODIS / VIIRS / Matched",
+                value=True,
+                key="chart_show_cats",
+            )
+        with s2:
+            show_frp = st.checkbox("FRP (MW)", value=True, key="chart_show_frp")
+            show_mean = st.checkbox("Mean line", value=True, key="chart_show_mean")
+        with s3:
+            show_rolling = st.checkbox(
+                "Rolling average",
+                value=True,
+                key="chart_show_roll",
+            )
+            show_anomalies = st.checkbox(
+                "Busy days",
+                value=True,
+                key="chart_show_anom",
+            )
+        with s4:
+            if span_days > 0 and st.button(
+                "Reset focus to full range",
+                key="chart_reset_focus",
+                use_container_width=True,
+            ):
+                st.session_state.chart_focus = (start, end)
+                if "chart_focus_slider" in st.session_state:
+                    del st.session_state["chart_focus_slider"]
+                st.rerun()
+
+        if span_days > 0:
+            raw_focus = st.session_state.get("chart_focus", (start, end))
+            focus_start, focus_end = st.slider(
+                "Date focus (chart + map)",
+                min_value=start,
+                max_value=end,
+                value=_coerce_focus_dates(start, end, raw_focus),
+                format="YYYY-MM-DD",
+                key="chart_focus_slider",
+            )
+            focus_start, focus_end = _coerce_focus_dates(
+                start, end, (focus_start, focus_end)
+            )
+        else:
+            focus_start, focus_end = start, end
+        st.session_state.chart_focus = (focus_start, focus_end)
+
+    return {
+        "freq_choice": freq_choice,
+        "chart_style": chart_style,
+        "y_log": y_log,
+        "show_total": show_total,
+        "show_categories": show_categories,
+        "show_frp": show_frp,
+        "show_mean": show_mean,
+        "show_rolling": show_rolling,
+        "show_anomalies": show_anomalies,
+        "focus_start": focus_start,
+        "focus_end": focus_end,
+        "data_key": data_key,
+    }
 
 
 def build_monthly_trend_chart(monthly: pd.DataFrame) -> go.Figure:
@@ -1617,58 +1760,18 @@ def render_results(controls: dict) -> None:
 
     # —— Activity chart first; map sits underneath ——
     st.subheader("Activity")
-    head_l, head_r = st.columns((2.2, 1.0))
-    with head_l:
-        st.caption(
-            "Exact totals from your uploaded archive. "
-            "Long ranges auto-aggregate so the chart stays readable."
-        )
-    with head_r:
-        span_days = max((end - start).days, 0)
-        if span_days >= 365:
-            detail_opts = ("Monthly", "Weekly")
-            default_idx = 0
-        elif span_days >= 90:
-            detail_opts = ("Weekly", "Daily")
-            default_idx = 0
-        else:
-            detail_opts = ("Daily", "Weekly")
-            default_idx = 0
-        freq_choice = st.radio(
-            "Detail",
-            options=detail_opts,
-            horizontal=True,
-            index=default_idx,
-            key="chart_freq_v2",
-        )
-
-    span_days = max((end - start).days, 0)
-    if span_days > 0:
-        raw_focus = st.session_state.get("chart_focus", (start, end))
-        # Default chart focus: full archive selection (not a tiny 10-day slice)
-        if (
-            st.session_state.get("_focus_data_key") == data_key
-            and isinstance(raw_focus, (tuple, list))
-            and len(raw_focus) == 2
-        ):
-            pass
-        else:
-            raw_focus = (start, end)
-        focus_start, focus_end = st.slider(
-            "Chart / map focus",
-            min_value=start,
-            max_value=end,
-            value=_coerce_focus_dates(start, end, raw_focus),
-            format="YYYY-MM-DD",
-            key="chart_focus_slider",
-        )
-        focus_start, focus_end = _coerce_focus_dates(
-            start, end, (focus_start, focus_end)
-        )
-        st.session_state.chart_focus = (focus_start, focus_end)
-    else:
-        focus_start, focus_end = start, end
-        st.session_state.chart_focus = (focus_start, focus_end)
+    st.caption(
+        "Exact totals from your uploaded archive. "
+        "Use the panel below to change aggregation, series, and date focus."
+    )
+    chart_ctrl = render_chart_control_panel(
+        start=start,
+        end=end,
+        data_key=data_key,
+    )
+    freq_choice = chart_ctrl["freq_choice"]
+    focus_start = chart_ctrl["focus_start"]
+    focus_end = chart_ctrl["focus_end"]
 
     if isinstance(daily_series, pd.DataFrame) and not daily_series.empty:
         ds = daily_series.copy()
@@ -1691,8 +1794,8 @@ def render_results(controls: dict) -> None:
         st.info("Not enough data for the chart.")
     else:
         chart_daily = daily_focus.copy()
-        span_focus = max((focus_end - focus_start).days, 1)
-        if freq_choice == "Monthly" or span_focus >= 700:
+        # Honor the user's aggregation choice (no silent override).
+        if freq_choice == "Monthly":
             tmp = chart_daily.set_index("period").sort_index()
             agg = {
                 k: "sum"
@@ -1701,7 +1804,7 @@ def render_results(controls: dict) -> None:
             }
             chart_daily = tmp.resample("MS").agg(agg).dropna(how="all").reset_index()
             freq_label = "Monthly"
-        elif freq_choice == "Weekly" or span_focus >= 90:
+        elif freq_choice == "Weekly":
             tmp = chart_daily.set_index("period").sort_index()
             agg = {
                 k: "sum"
@@ -1734,6 +1837,14 @@ def render_results(controls: dict) -> None:
             daily=chart_daily,
             focus_start=focus_start,
             focus_end=focus_end,
+            show_categories=chart_ctrl["show_categories"],
+            show_total=chart_ctrl["show_total"],
+            show_frp=chart_ctrl["show_frp"],
+            show_mean=chart_ctrl["show_mean"],
+            show_rolling=chart_ctrl["show_rolling"],
+            show_anomalies=chart_ctrl["show_anomalies"],
+            chart_style=chart_ctrl["chart_style"],
+            y_log=chart_ctrl["y_log"],
         )
         st.plotly_chart(
             fig,
