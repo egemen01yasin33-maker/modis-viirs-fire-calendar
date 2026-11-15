@@ -88,12 +88,22 @@
       margin: 0.85rem 0 0.35rem;
     }
     .hint { color: var(--muted); font-size: 0.8rem; margin: 0.5rem 0 0; }
+    .mode-badge {
+      display: inline-block;
+      border: 1px solid var(--teal);
+      color: var(--teal);
+      font-size: 0.78rem;
+      font-weight: 600;
+      padding: 0.45rem 0.65rem;
+      margin-bottom: 0.15rem;
+    }
     .stats {
       display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
+      grid-template-columns: repeat(5, minmax(0, 1fr));
       gap: 0.5rem;
       margin: 0.75rem 0;
     }
+    @media (max-width: 900px) { .stats { grid-template-columns: repeat(3, 1fr); } }
     @media (max-width: 640px) { .stats { grid-template-columns: repeat(2, 1fr); } }
     .stat {
       background: #0a1016;
@@ -153,17 +163,11 @@
       <input type="hidden" name="csrf_token" value="{{ csrf }}" />
 
       <div class="row">
-        <label>Mode
-          <select name="mode" id="mode">
-            <option value="archive" {% if form.mode == 'archive' %}selected{% endif %} {% if not archive_available %}disabled{% endif %}>
-              Archive 2023–2026{% if not archive_available %} (missing){% endif %}
-            </option>
-            <option value="sample" {% if form.mode == 'sample' %}selected{% endif %}>Sample demo</option>
-            <option value="nrt" {% if form.mode == 'nrt' %}selected{% endif %} {% if not nrt_available %}disabled{% endif %}>
-              Live FIRMS NRT{% if not nrt_available %} (not configured){% endif %}
-            </option>
-          </select>
-        </label>
+        <div>
+          <div style="font-size:0.78rem;color:var(--muted);margin-bottom:0.25rem">Mode (auto from dates)</div>
+          <div class="mode-badge" id="mode-badge">{{ form.mode_label }}</div>
+          <input type="hidden" name="mode" id="mode" value="{{ form.mode }}" />
+        </div>
 
         <label>Area
           <select name="area_mode" id="area_mode">
@@ -174,8 +178,7 @@
 
         <label class="region-row">Region
           <select name="region" id="region">
-            {% set region_list = archive_regions if form.mode == 'archive' else all_presets %}
-            {% for name in region_list %}
+            {% for name in archive_regions %}
             <option value="{{ name }}" {% if name == form.region %}selected{% endif %}>{{ name }}</option>
             {% endfor %}
           </select>
@@ -265,6 +268,7 @@
       <div class="stat"><b>{{ result.summary.get('modis_only', 0) }}</b><span>MODIS-only (sample)</span></div>
       <div class="stat"><b>{{ result.summary.get('viirs_only', 0) }}</b><span>VIIRS-only (sample)</span></div>
       <div class="stat"><b>{{ result.summary.get('total', result.rows) }}</b><span>Total in window</span></div>
+      <div class="stat"><b>{{ result.summary.get('frp_sum', 0) }}</b><span>FRP sum (MW)</span></div>
     </div>
 
     {% if result.compare %}
@@ -286,6 +290,7 @@
       <span><i class="dot" style="background:#00e5d4"></i>Matched</span>
       <span><i class="dot" style="background:#14919b"></i>MODIS-only</span>
       <span><i class="dot" style="background:#7df9ff"></i>VIIRS-only</span>
+      <span><i class="dot" style="background:#f0c674"></i>FRP (MW)</span>
       <span><i class="dot" style="background:#f0c674;border-radius:0;width:12px;height:2px;vertical-align:middle"></i>Selected area</span>
     </div>
 
@@ -314,38 +319,16 @@
 
   <script>
     (function () {
-      const mode = document.getElementById("mode");
       const areaMode = document.getElementById("area_mode");
       const body = document.body;
-      const archiveOpts = {{ archive_regions | tojson }};
-      const allOpts = {{ all_presets | tojson }};
       const presetBboxes = {{ preset_bboxes | tojson }};
       const region = document.getElementById("region");
-      const current = {{ form.region | tojson }};
       const archMin = {{ form.archive_min | tojson }};
       const archMax = {{ form.archive_max | tojson }};
       const formEl = document.getElementById("run-form");
-
-      function fillRegions(list) {
-        const prev = region.value || current;
-        region.innerHTML = "";
-        list.forEach((name) => {
-          const opt = document.createElement("option");
-          opt.value = name;
-          opt.textContent = name;
-          if (name === prev) opt.selected = true;
-          region.appendChild(opt);
-        });
-        if (![...region.options].some((o) => o.selected) && region.options.length) {
-          region.options[0].selected = true;
-        }
-        syncCoordsFromRegion();
-      }
-
-      function syncMode() {
-        body.dataset.mode = mode.value;
-        fillRegions(mode.value === "archive" ? archiveOpts : allOpts);
-      }
+      const modeBadge = document.getElementById("mode-badge");
+      const modeInput = document.getElementById("mode");
+      const nrtAvailable = {{ nrt_available | tojson }};
 
       function syncArea() {
         body.dataset.area = areaMode.value;
@@ -367,10 +350,30 @@
         return iso;
       }
 
+      function refreshModeBadge() {
+        const start = document.getElementById("start_date").value;
+        const end = document.getElementById("end_date").value;
+        if (!start || !end) return;
+        const today = new Date();
+        const tIso = today.toISOString().slice(0, 10);
+        const span = Math.floor((new Date(end) - new Date(start)) / 86400000) + 1;
+        const recent = end >= tIso.slice(0, 8) + String(today.getDate()-1).padStart(2,"0") || end === tIso;
+        // Keep badge simple: archive unless a short live window ending today
+        const live = nrtAvailable && recent && span >= 1 && span <= {{ max_days }};
+        if (live) {
+          modeInput.value = "nrt";
+          modeBadge.textContent = "Live FIRMS NRT (auto from dates)";
+          body.dataset.mode = "nrt";
+        } else {
+          modeInput.value = "archive";
+          modeBadge.textContent = "Archive 2023–2026 (auto from dates)";
+          body.dataset.mode = "archive";
+        }
+      }
+
       function setPrimary(start, end, autoRun) {
         document.getElementById("start_date").value = clampIso(start);
         document.getElementById("end_date").value = clampIso(end);
-        // Auto-fill compare = previous year same window when possible
         const s = new Date(start + "T00:00:00Z");
         const e = new Date(end + "T00:00:00Z");
         const cs = new Date(s); cs.setUTCFullYear(cs.getUTCFullYear() - 1);
@@ -379,6 +382,7 @@
         document.getElementById("compare_start").value = clampIso(toIso(cs));
         document.getElementById("compare_end").value = clampIso(toIso(ce));
         document.getElementById("compare").checked = true;
+        refreshModeBadge();
         if (autoRun) formEl.requestSubmit();
       }
 
@@ -403,11 +407,12 @@
         }
       });
 
-      mode.addEventListener("change", syncMode);
       areaMode.addEventListener("change", syncArea);
       region.addEventListener("change", syncCoordsFromRegion);
-      syncMode();
+      document.getElementById("start_date").addEventListener("change", refreshModeBadge);
+      document.getElementById("end_date").addEventListener("change", refreshModeBadge);
       syncArea();
+      refreshModeBadge();
     })();
   </script>
 
@@ -427,18 +432,40 @@
           data: {
             labels: series.labels,
             datasets: [
-              { label: "Matched", data: series.matched, borderColor: series.colors.matched, tension: 0.2, pointRadius: 1.5 },
-              { label: "MODIS-only", data: series.modis, borderColor: series.colors.modis, tension: 0.2, pointRadius: 1.5 },
-              { label: "VIIRS-only", data: series.viirs, borderColor: series.colors.viirs, tension: 0.2, pointRadius: 1.5 },
+              { label: "Matched", data: series.matched, borderColor: series.colors.matched, tension: 0.2, pointRadius: 1.5, yAxisID: "y" },
+              { label: "MODIS-only", data: series.modis, borderColor: series.colors.modis, tension: 0.2, pointRadius: 1.5, yAxisID: "y" },
+              { label: "VIIRS-only", data: series.viirs, borderColor: series.colors.viirs, tension: 0.2, pointRadius: 1.5, yAxisID: "y" },
+              {
+                label: "FRP (MW)",
+                data: series.frp || [],
+                borderColor: (series.colors && series.colors.frp) || "#f0c674",
+                backgroundColor: "rgba(240,198,116,0.12)",
+                tension: 0.2,
+                pointRadius: 1.5,
+                yAxisID: "yFrp",
+                borderDash: [5, 3],
+              },
             ],
           },
           options: {
             responsive: true,
             maintainAspectRatio: false,
+            interaction: { mode: "index", intersect: false },
             plugins: { legend: { labels: { color: "#8aa0ad" } } },
             scales: {
               x: { ticks: { color: "#8aa0ad", maxTicksLimit: 8 }, grid: { color: "#24303a" } },
-              y: { ticks: { color: "#8aa0ad" }, grid: { color: "#24303a" } },
+              y: {
+                position: "left",
+                title: { display: true, text: "Hotspots", color: "#8aa0ad" },
+                ticks: { color: "#8aa0ad" },
+                grid: { color: "#24303a" },
+              },
+              yFrp: {
+                position: "right",
+                title: { display: true, text: "FRP (MW)", color: "#f0c674" },
+                ticks: { color: "#f0c674" },
+                grid: { drawOnChartArea: false },
+              },
             },
           },
         });
@@ -453,13 +480,16 @@
 
         const layer = L.layerGroup().addTo(map);
         for (const p of points) {
+          const frpTxt = (p.frp != null && !Number.isNaN(p.frp))
+            ? `<br>FRP: ${Number(p.frp).toFixed(1)} MW`
+            : "";
           L.circleMarker([p.lat, p.lon], {
             radius: 4,
             color: p.color,
             fillColor: p.color,
             fillOpacity: 0.85,
             weight: 1,
-          }).addTo(layer).bindPopup(p.c);
+          }).addTo(layer).bindPopup(`${p.c || "hotspot"}${frpTxt}`);
         }
 
         let fit = null;

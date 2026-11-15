@@ -196,11 +196,17 @@ def _points_json(df: pd.DataFrame) -> str:
     pts = []
     for row in work.itertuples(index=False):
         cat = str(getattr(row, "category", "") or "")
+        frp_val = getattr(row, "frp", None)
+        try:
+            frp_f = float(frp_val) if frp_val is not None and frp_val == frp_val else None
+        except (TypeError, ValueError):
+            frp_f = None
         pts.append(
             {
                 "lat": float(row.latitude),
                 "lon": float(row.longitude),
                 "c": cat,
+                "frp": frp_f,
                 "color": CATEGORY_COLORS.get(cat, "#88aabb"),
             }
         )
@@ -209,7 +215,21 @@ def _points_json(df: pd.DataFrame) -> str:
 
 def _series_json(series: pd.DataFrame) -> str:
     if series is None or series.empty:
-        return json.dumps({"labels": [], "matched": [], "modis": [], "viirs": []})
+        return json.dumps(
+            {
+                "labels": [],
+                "matched": [],
+                "modis": [],
+                "viirs": [],
+                "frp": [],
+                "colors": {
+                    "matched": CATEGORY_COLORS[MATCHED],
+                    "modis": CATEGORY_COLORS[MODIS_ONLY],
+                    "viirs": CATEGORY_COLORS[VIIRS_ONLY],
+                    "frp": "#f0c674",
+                },
+            }
+        )
     labels = [str(p)[:10] for p in series["period"].tolist()]
 
     def _col(name: str) -> list[int]:
@@ -217,20 +237,42 @@ def _series_json(series: pd.DataFrame) -> str:
             return [0] * len(labels)
         return [int(x) for x in series[name].tolist()]
 
+    if "frp_sum" in series.columns:
+        frp = [round(float(x or 0), 2) for x in series["frp_sum"].tolist()]
+    else:
+        frp = [0.0] * len(labels)
+
     return json.dumps(
         {
             "labels": labels,
             "matched": _col(MATCHED),
             "modis": _col(MODIS_ONLY),
             "viirs": _col(VIIRS_ONLY),
+            "frp": frp,
             "colors": {
                 "matched": CATEGORY_COLORS[MATCHED],
                 "modis": CATEGORY_COLORS[MODIS_ONLY],
                 "viirs": CATEGORY_COLORS[VIIRS_ONLY],
+                "frp": "#f0c674",
             },
         },
         separators=(",", ":"),
     )
+
+
+def _auto_mode(start: date, end: date) -> str:
+    """
+    Pick data source from the date window:
+    - Live NRT when the window is recent (≤ MAX_DAY_RANGE days, ends near today)
+      and NRT is configured
+    - Otherwise Archive 2023–2026
+    """
+    today = date.today()
+    span = (end - start).days + 1
+    recent = end >= (today - timedelta(days=1)) and start >= (today - timedelta(days=365))
+    if _nrt_configured() and recent and 1 <= span <= MAX_DAY_RANGE:
+        return "nrt"
+    return "archive"
 
 
 def _fmt_pct(pct: float | None) -> str:
@@ -389,9 +431,16 @@ def _archive_result(
     )
     result = _run_pipeline(payload["raw"], daily=payload.get("daily"))
     total = int(payload.get("total_count") or result["rows"])
+    daily = payload.get("daily")
+    frp_total = 0.0
+    if daily is not None and not daily.empty and "frp_sum" in daily.columns:
+        frp_total = float(daily["frp_sum"].sum())
+    elif not payload["raw"].empty and "frp" in payload["raw"].columns:
+        frp_total = float(pd.to_numeric(payload["raw"]["frp"], errors="coerce").fillna(0).sum())
     result["summary"] = {
         **result["summary"],
         "total": total,
+        "frp_sum": round(frp_total, 1),
     }
     result["rows"] = total
     result["bbox"] = [min_lon, min_lat, max_lon, max_lat]
@@ -435,6 +484,7 @@ def _default_form() -> dict:
     turkey = PRESET_REGIONS.get("Turkey", (25.5, 35.8, 45.0, 42.3))
     return {
         "mode": "archive",
+        "mode_label": "Archive 2023–2026 (auto from dates)",
         "area_mode": "preset",
         "region": "Turkey",
         "min_lon": f"{turkey[0]:.2f}",
@@ -490,7 +540,7 @@ def _html_response(
         key=_CSRF_COOKIE,
         value=csrf,
         httponly=True,
-        samesite="strict",
+        samesite="lax",
         secure=_cookie_secure(),
         max_age=3600,
     )
@@ -498,7 +548,7 @@ def _html_response(
 
 
 def _run_with_form(form: dict) -> tuple[dict | None, str | None, dict]:
-    """Execute the selected mode; returns (result, error, form)."""
+    """Execute archive/sample from form dates; mode is derived from the window."""
     error = None
     result = None
     try:
@@ -514,29 +564,30 @@ def _run_with_form(form: dict) -> tuple[dict | None, str | None, dict]:
         form["min_lat"] = f"{bbox[1]:.4f}".rstrip("0").rstrip(".")
         form["max_lon"] = f"{bbox[2]:.4f}".rstrip("0").rstrip(".")
         form["max_lat"] = f"{bbox[3]:.4f}".rstrip("0").rstrip(".")
-        if form["area_mode"] != "custom":
+        if form.get("area_mode") != "custom":
             form["region"] = label
 
-        if form["mode"] == "nrt":
-            if not _nrt_configured():
-                raise FirmsApiError(
-                    "Live FIRMS is not enabled on this host "
-                    "(needs FIRMS_MAP_KEY and NRT_GATE_PASSWORD)."
-                )
-            # access_code checked by caller for POST; GET never hits live NRT
-            raise FirmsApiError("Use Run with an access code for live FIRMS.")
-        if form["mode"] == "sample":
-            result = cached_sample_result()
-            return result, None, form
-
-        start = _parse_date(form["start_date"], ARCHIVE_DATE_MIN)
-        end = _parse_date(form["end_date"], ARCHIVE_DATE_MAX)
+        start = _parse_date(form.get("start_date"), ARCHIVE_DATE_MIN)
+        end = _parse_date(form.get("end_date"), ARCHIVE_DATE_MAX)
         start, end = _clamp_archive_dates(start, end)
         form["start_date"] = start.isoformat()
         form["end_date"] = end.isoformat()
+        form["mode"] = _auto_mode(start, end)
+        form["mode_label"] = (
+            "Live FIRMS NRT (auto from dates)"
+            if form["mode"] == "nrt"
+            else "Archive 2023–2026 (auto from dates)"
+        )
+
+        if form["mode"] == "nrt":
+            # NRT needs access code — fall back to archive for anonymous GET/chips
+            form["mode"] = "archive"
+            form["mode_label"] = "Archive 2023–2026 (auto — live needs access code)"
+
         if not list_archive_regions(ROOT):
             result = cached_sample_result()
             form["mode"] = "sample"
+            form["mode_label"] = "Sample demo"
             return result, None, form
 
         result = _archive_result(label, start, end, bbox)
@@ -564,6 +615,7 @@ def _run_with_form(form: dict) -> tuple[dict | None, str | None, dict]:
 
 
 @app.get("/", response_class=HTMLResponse)
+@app.get("/run", response_class=HTMLResponse)
 async def home(request: Request) -> Response:
     csrf = request.cookies.get(_CSRF_COOKIE) or _issue_csrf()
     form = _default_form()
@@ -580,7 +632,6 @@ async def home(request: Request) -> Response:
 @app.post("/run", response_class=HTMLResponse)
 async def run(
     request: Request,
-    mode: str = Form("archive"),
     area_mode: str = Form("preset"),
     region: str = Form("Turkey"),
     min_lon: str = Form("25.5"),
@@ -595,12 +646,12 @@ async def run(
     compare_end: str = Form(""),
     csrf_token: str = Form(""),
     access_code: str = Form(""),
+    force_nrt: str = Form(""),
 ) -> Response:
     days = max(1, min(int(days), MAX_DAY_RANGE))
     csrf = request.cookies.get(_CSRF_COOKIE) or _issue_csrf()
     form = {
         **_default_form(),
-        "mode": mode if mode in {"archive", "sample", "nrt"} else "archive",
         "area_mode": "custom" if area_mode == "custom" else "preset",
         "region": region if region in PRESET_REGIONS else "Turkey",
         "min_lon": min_lon,
@@ -615,20 +666,27 @@ async def run(
         "compare_end": compare_end,
     }
 
-    if not _csrf_ok(request, csrf_token):
-        error = "Invalid or missing form token. Reload the page and try again."
-        ctx = _page_context(request, result=None, error=error, form=form, csrf=csrf)
-        return _html_response(request, ctx, csrf=csrf)
+    start = _parse_date(form["start_date"], ARCHIVE_DATE_MIN)
+    end = _parse_date(form["end_date"], ARCHIVE_DATE_MAX)
+    start, end = _clamp_archive_dates(start, end)
+    form["start_date"] = start.isoformat()
+    form["end_date"] = end.isoformat()
+    auto = _auto_mode(start, end)
+    want_nrt = force_nrt in {"1", "on", "true", "yes"} or auto == "nrt"
 
-    if form["mode"] == "nrt":
+    # Archive/sample are read-only public queries — soft CSRF (tunnel/cookie quirks).
+    # Live NRT still requires a valid CSRF + access code.
+    csrf_valid = _csrf_ok(request, csrf_token)
+    if want_nrt and _nrt_configured() and access_code:
+        if not csrf_valid:
+            error = "Invalid or missing form token. Reload the page and try again."
+            form["mode"] = "nrt"
+            form["mode_label"] = "Live FIRMS NRT"
+            ctx = _page_context(request, result=None, error=error, form=form, csrf=csrf)
+            return _html_response(request, ctx, csrf=csrf)
         error = None
         result = None
         try:
-            if not _nrt_configured():
-                raise FirmsApiError(
-                    "Live FIRMS is not enabled on this host "
-                    "(needs FIRMS_MAP_KEY and NRT_GATE_PASSWORD)."
-                )
             if not _gate_ok(access_code):
                 raise FirmsApiError("Invalid access code for live FIRMS.")
             ip = _client_ip(request)
@@ -647,28 +705,40 @@ async def run(
             form["min_lat"] = str(bbox[1])
             form["max_lon"] = str(bbox[2])
             form["max_lat"] = str(bbox[3])
-            end = date.today()
-            start = end - timedelta(days=days - 1)
+            nrt_end = date.today()
+            nrt_start = nrt_end - timedelta(days=days - 1)
             _record_nrt(ip)
             raw = fetch_firms_area(
                 _firms_key(),
                 *bbox,
-                start,
-                end,
+                nrt_start,
+                nrt_end,
                 sensors=AVAILABLE_SENSORS,
             )
             result = _run_pipeline(raw)
             result["bbox"] = list(bbox)
             result["map_bounds"] = [[bbox[1], bbox[0]], [bbox[3], bbox[2]]]
+            if not raw.empty and "frp" in raw.columns:
+                frp_total = float(pd.to_numeric(raw["frp"], errors="coerce").fillna(0).sum())
+                result["summary"] = {
+                    **result["summary"],
+                    "frp_sum": round(frp_total, 1),
+                }
             result["source_label"] = (
-                f"Live FIRMS NRT · {label} · {start.isoformat()} → {end.isoformat()}"
+                f"Live FIRMS NRT · {label} · "
+                f"{nrt_start.isoformat()} → {nrt_end.isoformat()}"
             )
             result.pop("harm", None)
+            form["mode"] = "nrt"
+            form["mode_label"] = "Live FIRMS NRT (auto from dates)"
         except (FirmsApiError, ValueError) as exc:
             error = str(exc)
+            result, _, form = _run_with_form(form)
         except Exception as exc:  # noqa: BLE001
             error = f"Unexpected error: {exc}"
     else:
+        if not csrf_valid:
+            csrf = _issue_csrf()
         result, error, form = _run_with_form(form)
 
     csrf = _issue_csrf()

@@ -39,18 +39,38 @@ def has_full_archive_db(root: Path) -> bool:
     return path.is_file() and path.stat().st_size > 1_000_000
 
 
+# Turkey-first order for the UI (Global last — slow / sparse on hosted demos)
+UI_REGION_ORDER: tuple[str, ...] = (
+    "Turkey",
+    "Aegean",
+    "Central Anatolia",
+    "Marmara",
+    "Mediterranean",
+    "California",
+    "Amazon",
+    "Australia",
+    "Indonesia",
+    "Siberia",
+    "Global",
+)
+
+
 def list_archive_regions(root: Path) -> list[str]:
-    """Regions the UI can query in Archive mode."""
+    """Regions the UI can query in Archive mode (Turkey first)."""
     if has_full_archive_db(root):
         from src.firms_api import PRESET_REGIONS
 
-        return list(PRESET_REGIONS.keys())
-    base = bundled_dir(root)
-    return [
-        name
-        for name, fname in BUNDLED_REGION_FILES.items()
-        if (base / fname).is_file()
-    ]
+        available = set(PRESET_REGIONS.keys())
+    else:
+        base = bundled_dir(root)
+        available = {
+            name
+            for name, fname in BUNDLED_REGION_FILES.items()
+            if (base / fname).is_file()
+        }
+    ordered = [name for name in UI_REGION_ORDER if name in available]
+    extras = sorted(available - set(ordered))
+    return ordered + extras
 
 
 def pick_bundled_region_for_bbox(
@@ -302,21 +322,24 @@ def load_archive_window(
 
 
 def daily_to_series_json(daily: pd.DataFrame) -> dict:
-    """Chart payload from exact daily sensor counts (Matched often 0 in aggregate)."""
+    """Chart payload: daily sensor counts + FRP (Fire Radiative Power) sum."""
     from src.harmonize import CATEGORY_COLORS
 
+    empty = {
+        "labels": [],
+        "matched": [],
+        "modis": [],
+        "viirs": [],
+        "frp": [],
+        "colors": {
+            "matched": CATEGORY_COLORS[MATCHED],
+            "modis": CATEGORY_COLORS[MODIS_ONLY],
+            "viirs": CATEGORY_COLORS[VIIRS_ONLY],
+            "frp": "#f0c674",
+        },
+    }
     if daily is None or daily.empty:
-        return {
-            "labels": [],
-            "matched": [],
-            "modis": [],
-            "viirs": [],
-            "colors": {
-                "matched": CATEGORY_COLORS[MATCHED],
-                "modis": CATEGORY_COLORS[MODIS_ONLY],
-                "viirs": CATEGORY_COLORS[VIIRS_ONLY],
-            },
-        }
+        return empty
     labels = [pd.Timestamp(p).strftime("%Y-%m-%d") for p in daily["period"].tolist()]
     matched = (
         [int(x) for x in daily[MATCHED].tolist()]
@@ -333,14 +356,20 @@ def daily_to_series_json(daily: pd.DataFrame) -> dict:
         if VIIRS_ONLY in daily.columns
         else [0] * len(labels)
     )
+    if "frp_sum" in daily.columns:
+        frp = [round(float(x or 0), 2) for x in daily["frp_sum"].tolist()]
+    else:
+        frp = [0.0] * len(labels)
     return {
         "labels": labels,
         "matched": matched,
         "modis": modis,
         "viirs": viirs,
+        "frp": frp,
         "colors": {
             "matched": CATEGORY_COLORS[MATCHED],
             "modis": CATEGORY_COLORS[MODIS_ONLY],
             "viirs": CATEGORY_COLORS[VIIRS_ONLY],
+            "frp": "#f0c674",
         },
     }
