@@ -488,9 +488,9 @@
         const layer = L.layerGroup().addTo(map);
 
         function pointRadius(frp) {
-          if (frp == null || Number.isNaN(frp)) return 5;
-          // FRP-scaled dots: ~5–14 px so individual fires read as points
-          return Math.max(5, Math.min(14, 4 + Math.sqrt(Math.max(frp, 0)) * 0.35));
+          if (frp == null || Number.isNaN(frp)) return 2.5;
+          // Compact FRP-scaled dots (~2–5.5 px) so the map stays readable
+          return Math.max(2, Math.min(5.5, 2 + Math.sqrt(Math.max(frp, 0)) * 0.12));
         }
 
         for (const p of points) {
@@ -501,10 +501,10 @@
           L.circleMarker([p.lat, p.lon], {
             renderer: canvasRenderer,
             radius: pointRadius(frp),
-            color: "#041016",
-            weight: 1,
+            color: p.color || "#00e5d4",
+            weight: 0.5,
             fillColor: p.color || "#00e5d4",
-            fillOpacity: 0.92,
+            fillOpacity: 0.88,
           }).addTo(layer).bindPopup(
             `<strong>${p.c || "Hotspot"}</strong>${frpTxt}<br>${Number(p.lat).toFixed(4)}, ${Number(p.lon).toFixed(4)}`
           );
