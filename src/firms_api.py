@@ -62,12 +62,15 @@ AVAILABLE_SENSORS = (
     "VIIRS_NOAA21_NRT",
 )
 
-# NRT Area API allows at most 10 days ending on a given date.
-# Exported for app.py date-range UI captions / validation.
+# NRT product window the app exposes: up to 10 days ending on a chosen date.
 MAX_DAY_RANGE: int = 10
+# Many MAP keys reject day_range > 5 (HTTP 400) even though docs list 1–10.
+# Longer windows are fetched as consecutive ≤5-day chunks.
+API_DAY_CHUNK: int = 5
 
 __all__ = (
     "AVAILABLE_SENSORS",
+    "API_DAY_CHUNK",
     "CITY_BBOXES",
     "FIRMS_AREA_BASE",
     "MAX_DAY_RANGE",
@@ -264,6 +267,29 @@ def fetch_sensor_area(
     return _parse_csv_response(response.text)
 
 
+def _nrt_day_chunks(
+    start_date: date, end_date: date, chunk_size: int = API_DAY_CHUNK
+) -> list[tuple[date, date, int]]:
+    """
+    Cover [start_date, end_date] with chunks of at most `chunk_size` days.
+
+    Each tuple is (chunk_start, chunk_end, days) suitable for Area API
+    day_range + end_date. Chunks are newest-first.
+    """
+    if chunk_size < 1:
+        raise ValueError("chunk_size must be >= 1")
+    chunks: list[tuple[date, date, int]] = []
+    cursor_end = end_date
+    while cursor_end >= start_date:
+        chunk_start = max(
+            start_date, cursor_end - timedelta(days=chunk_size - 1)
+        )
+        days = (cursor_end - chunk_start).days + 1
+        chunks.append((chunk_start, cursor_end, days))
+        cursor_end = chunk_start - timedelta(days=1)
+    return chunks
+
+
 def fetch_firms_area(
     map_key: str,
     min_lon: float,
@@ -277,8 +303,10 @@ def fetch_firms_area(
     """
     Fetch and concatenate Area API results for the date range.
 
-    NRT sources support at most 10 days ending on `end_date`. Sensors default
-    to MODIS_NRT + VIIRS_NOAA20_NRT + VIIRS_NOAA21_NRT.
+    App window is at most MAX_DAY_RANGE days ending on `end_date`. Requests
+    are split into API_DAY_CHUNK-day calls so keys that reject day_range>5
+    still cover a full 10-day slide. Sensors default to MODIS_NRT +
+    VIIRS_NOAA20_NRT + VIIRS_NOAA21_NRT.
     """
     key = (map_key or "").strip()
     if not key:
@@ -315,15 +343,24 @@ def fetch_firms_area(
             "Use a more recent window."
         )
 
+    chunks = _nrt_day_chunks(start_date, end_date, API_DAY_CHUNK)
     frames: list[pd.DataFrame] = []
     for sensor in sensor_list:
-        df = fetch_sensor_area(
-            key, sensor, min_lon, min_lat, max_lon, max_lat, days, end_date
-        )
-        if df is not None and not df.empty:
-            df = df.copy()
-            df["firms_source"] = sensor
-            frames.append(df)
+        for _chunk_start, chunk_end, chunk_days in chunks:
+            df = fetch_sensor_area(
+                key,
+                sensor,
+                min_lon,
+                min_lat,
+                max_lon,
+                max_lat,
+                chunk_days,
+                chunk_end,
+            )
+            if df is not None and not df.empty:
+                df = df.copy()
+                df["firms_source"] = sensor
+                frames.append(df)
 
     if not frames:
         return pd.DataFrame()
@@ -336,4 +373,20 @@ def fetch_firms_area(
         mask = (acq >= start_date) & (acq <= end_date)
         combined = combined.loc[mask | acq.isna()].reset_index(drop=True)
 
-    return combined
+    # Deduplicate across overlapping chunk edges / sensors
+    subset = [
+        c
+        for c in (
+            "latitude",
+            "longitude",
+            "acq_date",
+            "acq_time",
+            "satellite",
+            "firms_source",
+        )
+        if c in combined.columns
+    ]
+    if subset:
+        combined = combined.drop_duplicates(subset=subset, keep="first")
+
+    return combined.reset_index(drop=True)

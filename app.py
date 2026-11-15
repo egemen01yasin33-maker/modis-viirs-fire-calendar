@@ -116,27 +116,36 @@ def _is_wide_bbox(
     return (max_lon - min_lon) >= 120 or (max_lat - min_lat) >= 100
 
 
-# Show every fire below this count; above it, priority-sample (Matched + high FRP).
-MAP_FULL_THRESHOLD = 80_000
-MAX_MAP_POINTS = MAP_FULL_THRESHOLD
+# Map budgets — charts stay exact via DuckDB; the browser cannot paint 80k markers.
+MAP_FULL_THRESHOLD = 80_000  # load every row when the selection is smaller
 MAX_MAP_LOAD = MAP_FULL_THRESHOLD
+MAX_MAP_RENDER = 3_000  # hard Plotly paint cap (Matched + high FRP first)
 MAX_CHART_ANOMALIES = 15
 MAX_CHART_POINTS = 180
 # Skip expensive MODIS↔VIIRS matching above this map-sample size
-MATCH_ROW_LIMIT = 20_000
+MATCH_ROW_LIMIT = 8_000
 
 
 def _map_point_limit(bbox: tuple[float, float, float, float] | None = None) -> int:
-    return MAX_MAP_POINTS
+    return MAX_MAP_RENDER
 
 
-def _map_load_budget(bbox: tuple[float, float, float, float] | None = None) -> int:
+def _map_load_budget(
+    bbox: tuple[float, float, float, float] | None = None,
+    *,
+    known_total: int = 0,
+) -> int:
+    """Load all rows under the threshold; otherwise cap the DuckDB pull."""
+    if known_total and 0 < known_total <= MAP_FULL_THRESHOLD:
+        return int(known_total)
+    if known_total and known_total > MAP_FULL_THRESHOLD:
+        return MAX_MAP_LOAD
     return MAX_MAP_LOAD
 
 
 def _sample_for_map(
     df: pd.DataFrame,
-    limit: int = MAX_MAP_POINTS,
+    limit: int = MAX_MAP_RENDER,
 ) -> pd.DataFrame:
     """
     Keep every point at or under the threshold.
@@ -147,10 +156,30 @@ def _sample_for_map(
     if df is None or df.empty or len(df) <= limit:
         return df if df is not None else pd.DataFrame()
 
-    cols = [c for c in ("latitude", "longitude", "category", "frp") if c in df.columns]
-    work = df[cols].copy()
-    work["_frp"] = pd.to_numeric(work["frp"], errors="coerce").fillna(0.0) if "frp" in work.columns else 0.0
-    work["_matched"] = (work["category"] == MATCHED).astype("int8") if "category" in work.columns else 0
+    keep_cols = [
+        c
+        for c in (
+            "latitude",
+            "longitude",
+            "category",
+            "frp",
+            "acq_datetime",
+            "confidence",
+            "sensor",
+        )
+        if c in df.columns
+    ]
+    work = df[keep_cols].copy()
+    work["_frp"] = (
+        pd.to_numeric(work["frp"], errors="coerce").fillna(0.0)
+        if "frp" in work.columns
+        else 0.0
+    )
+    work["_matched"] = (
+        (work["category"] == MATCHED).astype("int8")
+        if "category" in work.columns
+        else 0
+    )
 
     # 1) Priority pool: Matched first, then highest FRP
     priority_n = max(int(limit * 0.7), 1)
@@ -200,7 +229,10 @@ def build_map_figure(
     bbox: tuple[float, float, float, float] | None = None,
 ) -> go.Figure:
     """
-    Map markers without tile wrap. Shows all points up to MAP_FULL_THRESHOLD.
+    Map markers without tile wrap.
+
+    Data may be loaded up to MAP_FULL_THRESHOLD; Plotly paints at most
+    MAX_MAP_RENDER points (Matched + high FRP first).
 
     Wide / Global → Scattergeo (Natural Earth). Regional → OSM with bounds.
     """
@@ -837,6 +869,7 @@ def load_archive_slice(
         start=start_iso,
         end=end_iso,
     )
+    known_total = int(daily_stats.get("total_count") or 0)
     map_payload = load_map_slice(
         folder_str,
         mtimes_key,
@@ -846,8 +879,11 @@ def load_archive_slice(
         max_lat,
         start_iso,
         end_iso,
-        int(daily_stats.get("total_count") or 0),
-        _map_load_budget((min_lon, min_lat, max_lon, max_lat)),
+        known_total,
+        _map_load_budget(
+            (min_lon, min_lat, max_lon, max_lat),
+            known_total=known_total,
+        ),
     )
     quality = harmonization_quality(map_payload["harmonized"])
     stats = {
@@ -949,6 +985,18 @@ def render_comparison(primary: pd.DataFrame, comparison: pd.DataFrame) -> None:
         )
 
 
+def _nrt_window_from_end(end_date: date, window_days: int) -> tuple[date, date]:
+    """Slide a 1…MAX_DAY_RANGE day window that always ends on end_date."""
+    today = date.today()
+    nrt_floor = today - timedelta(days=365)
+    end = min(max(end_date, nrt_floor), today)
+    days = max(1, min(int(window_days), MAX_DAY_RANGE))
+    start = end - timedelta(days=days - 1)
+    if start < nrt_floor:
+        start = nrt_floor
+    return start, end
+
+
 def render_control_panel(
     source_mode: str,
     archive_date_min: date | None = None,
@@ -963,6 +1011,7 @@ def render_control_panel(
     compare_default_start = today - timedelta(days=9)
     compare_default_end = today - timedelta(days=7)
     date_max = today
+    nrt_min = today - timedelta(days=365)
 
     if source_mode == "Archive CSV" and archive_date_min and archive_date_max:
         date_max = archive_date_max
@@ -1028,36 +1077,81 @@ def render_control_panel(
                 max_lat = st.number_input("North", value=45.0, format="%.2f")
 
     with col_dates:
-        primary_range = st.date_input(
-            "Dates",
-            value=(default_start, default_end),
-            min_value=archive_date_min if source_mode == "Archive CSV" else None,
-            max_value=date_max,
-            key="primary_dates_v2",
-        )
-        start_date, end_date = _parse_date_range(primary_range, default_end)
-
         compare_start = compare_end = None
-        if compare_mode:
-            compare_range = st.date_input(
-                "Compare with",
-                value=(compare_default_start, compare_default_end),
-                min_value=archive_date_min if source_mode == "Archive CSV" else None,
-                max_value=date_max,
-                key="compare_dates",
-            )
-            compare_start, compare_end = _parse_date_range(
-                compare_range, compare_default_end
-            )
-
-        # Archive updates live on every control change; NRT still needs a click
         if source_mode == "NRT API":
+            # End date drives a sliding NRT window (max 10 days).
+            end_date = st.date_input(
+                "End date",
+                value=default_end,
+                min_value=nrt_min,
+                max_value=today,
+                key="nrt_end_date",
+            )
+            window_days = st.slider(
+                "Window (days)",
+                min_value=1,
+                max_value=MAX_DAY_RANGE,
+                value=MAX_DAY_RANGE,
+                key="nrt_window_days",
+                help=(
+                    "FIRMS NRT returns at most 10 days ending on the selected "
+                    "date. Move the end date to slide that window."
+                ),
+            )
+            start_date, end_date = _nrt_window_from_end(end_date, window_days)
+            st.caption(
+                f"Live window: **{start_date} → {end_date}** "
+                f"({(end_date - start_date).days + 1} days). "
+                "Change the end date to slide the 10-day window."
+            )
+            if compare_mode:
+                compare_end = st.date_input(
+                    "Compare end date",
+                    value=compare_default_end,
+                    min_value=nrt_min,
+                    max_value=today,
+                    key="nrt_compare_end",
+                )
+                compare_window = st.slider(
+                    "Compare window (days)",
+                    min_value=1,
+                    max_value=MAX_DAY_RANGE,
+                    value=min(MAX_DAY_RANGE, 7),
+                    key="nrt_compare_window_days",
+                )
+                compare_start, compare_end = _nrt_window_from_end(
+                    compare_end, compare_window
+                )
+                st.caption(
+                    f"Compare window: **{compare_start} → {compare_end}**."
+                )
             fetch_clicked = st.button(
                 "Fetch live data",
                 type="primary",
                 use_container_width=True,
             )
         else:
+            primary_range = st.date_input(
+                "Dates",
+                value=(default_start, default_end),
+                min_value=archive_date_min,
+                max_value=date_max,
+                key="primary_dates_v2",
+            )
+            start_date, end_date = _parse_date_range(primary_range, default_end)
+
+            if compare_mode:
+                compare_range = st.date_input(
+                    "Compare with",
+                    value=(compare_default_start, compare_default_end),
+                    min_value=archive_date_min,
+                    max_value=date_max,
+                    key="compare_dates",
+                )
+                compare_start, compare_end = _parse_date_range(
+                    compare_range, compare_default_end
+                )
+            # Archive updates live on every control change
             fetch_clicked = True
 
     # Map radio labels back to internal region modes used elsewhere
@@ -1115,6 +1209,7 @@ def render_map_focus_panel(
     focus_end: date,
     exact_total: int,
     harmonized_fallback: pd.DataFrame | None,
+    use_archive_map: bool = True,
 ) -> None:
     """
     Map + date slider only. Isolated so slider drags do not rebuild the chart
@@ -1141,7 +1236,7 @@ def render_map_focus_panel(
 
     focused = harmonized_fallback if harmonized_fallback is not None else pd.DataFrame()
     map_stats: dict = {}
-    if bbox is not None:
+    if use_archive_map and bbox is not None:
         min_lon, min_lat, max_lon, max_lat = (float(x) for x in bbox)
         try:
             payload = load_map_slice(
@@ -1154,7 +1249,7 @@ def render_map_focus_panel(
                 cur_start.isoformat(),
                 cur_end.isoformat(),
                 0,  # recount for this focus window (fast; avoids stale totals)
-                _map_load_budget(bbox),
+                _map_load_budget(bbox, known_total=0),
             )
             if payload.get("harmonized") is not None:
                 focused = payload["harmonized"]
@@ -1175,11 +1270,32 @@ def render_map_focus_panel(
                 focused = harmonized_fallback.loc[mask]
                 if focused.empty:
                     focused = harmonized_fallback
+    elif (
+        harmonized_fallback is not None
+        and not harmonized_fallback.empty
+        and "acq_datetime" in harmonized_fallback.columns
+    ):
+        # NRT / in-memory path: filter the fetched frame to the focus window
+        mask = (
+            (harmonized_fallback["acq_datetime"] >= pd.Timestamp(cur_start))
+            & (
+                harmonized_fallback["acq_datetime"]
+                < pd.Timestamp(cur_end) + pd.Timedelta(days=1)
+            )
+        )
+        focused = harmonized_fallback.loc[mask]
+        if focused.empty:
+            focused = harmonized_fallback
 
     map_n = int(len(focused)) if focused is not None else 0
     scanned_n = int(map_stats.get("rows_scanned") or exact_total or map_n)
-    truncated = bool(map_stats.get("truncated")) or scanned_n > MAP_FULL_THRESHOLD
-    plotted = min(map_n, _map_point_limit(bbox))
+    plot_cap = _map_point_limit(bbox)
+    plotted = min(map_n, plot_cap)
+    truncated = (
+        bool(map_stats.get("truncated"))
+        or scanned_n > MAP_FULL_THRESHOLD
+        or map_n > plot_cap
+    )
     if plotted:
         st.caption(
             f"{plotted:,} fires on the map for {cur_start} → {cur_end}"
@@ -1203,7 +1319,8 @@ def render_map_focus_panel(
     )
     if truncated:
         st.caption(
-            "Map displays a performance sample. Full statistics are shown above."
+            "Map shows a performance sample (Matched + high FRP first). "
+            "Charts and totals use the full selection."
         )
 
     with st.expander("Map sample table", expanded=False):
@@ -1347,6 +1464,7 @@ def render_results(controls: dict) -> None:
         focus_end=focus_end,
         exact_total=exact_total,
         harmonized_fallback=harmonized,
+        use_archive_map=meta.get("source") != "NRT API",
     )
 
     # —— Activity chart (full width, below map) ——
@@ -1564,7 +1682,8 @@ def run_archive_pipeline(controls: dict) -> str | None:
             "chart uses the full selection."
         )
 
-    st.session_state.harmonized = primary
+    # Keep session light — Plotly/fallback map never needs > MAX_MAP_RENDER rows
+    st.session_state.harmonized = _sample_for_map(primary, MAX_MAP_RENDER)
     st.session_state.last_meta = {
         "region": region_label,
         "bbox": (min_lon, min_lat, max_lon, max_lat),
@@ -1775,29 +1894,48 @@ def main() -> None:
 
     inventory = describe_csv_files(DATA_PATH)
     archive_date_min, archive_date_max = peek_archive_date_bounds(DATA_PATH)
-    # Prefer local archive when present; otherwise live FIRMS (needs MAP_KEY)
-    source_mode = "Archive CSV" if inventory else "NRT API"
+    map_key = get_firms_map_key()
+    has_archive = bool(inventory)
+    has_nrt = bool(map_key)
+
+    if has_archive and has_nrt:
+        source_mode = st.radio(
+            "Data source",
+            options=("Archive CSV", "NRT API"),
+            horizontal=True,
+            key="data_source_mode",
+            help=(
+                "Archive = local CSVs in data/. "
+                "NRT API = live FIRMS (≤10 days ending on the date you pick)."
+            ),
+        )
+    elif has_archive:
+        source_mode = "Archive CSV"
+    elif has_nrt:
+        source_mode = "NRT API"
+    else:
+        st.warning(
+            "No fire archive found and live data needs a FIRMS key in .env."
+        )
+        with st.expander("Add archive files"):
+            uploads = st.file_uploader(
+                "Upload CSV",
+                type=["csv"],
+                accept_multiple_files=True,
+                label_visibility="collapsed",
+            )
+            if uploads:
+                save_uploaded_csvs(DATA_PATH, uploads)
+                load_archive_slice.clear()
+                load_map_slice.clear()
+                st.rerun()
+        return
 
     if source_mode == "NRT API":
-        map_key = get_firms_map_key()
-        if not map_key:
-            st.warning(
-                "No fire archive found and live data needs a FIRMS key in .env."
-            )
-            with st.expander("Add archive files"):
-                uploads = st.file_uploader(
-                    "Upload CSV",
-                    type=["csv"],
-                    accept_multiple_files=True,
-                    label_visibility="collapsed",
-                )
-                if uploads:
-                    save_uploaded_csvs(DATA_PATH, uploads)
-                    load_archive_slice.clear()
-                    load_map_slice.clear()
-                    st.rerun()
-            return
-
+        st.caption(
+            "Live NRT: pick an end date — the window slides with it "
+            f"(max {MAX_DAY_RANGE} days)."
+        )
         st.divider()
         controls = render_control_panel(
             source_mode,

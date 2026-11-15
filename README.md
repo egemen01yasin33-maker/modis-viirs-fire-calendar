@@ -50,7 +50,10 @@ loaded into RAM in full.
 
 1. Get a [FIRMS MAP Key](https://firms.modaps.eosdis.nasa.gov/api/key/).
 2. Put `FIRMS_MAP_KEY=...` in `.env`.
-3. Choose region + dates (≤10 days) and click **Fetch Data**.
+3. Choose **NRT API** as the data source (available alongside Archive when both exist).
+4. Pick an **end date** — the live window slides with it (1–10 days). Click **Fetch live data**.
+
+Longer windows are fetched in short API chunks so keys that reject `day_range>5` still cover a full 10-day slide.
 
 ## Layout
 

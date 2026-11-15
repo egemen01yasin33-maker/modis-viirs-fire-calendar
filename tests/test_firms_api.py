@@ -13,8 +13,11 @@ if str(ROOT) not in sys.path:
 
 from src.firms_api import (
     AVAILABLE_SENSORS,
+    API_DAY_CHUNK,
+    MAX_DAY_RANGE,
     PRESET_REGIONS,
     FirmsApiError,
+    _nrt_day_chunks,
     _parse_csv_response,
     fetch_firms_area,
     fetch_sensor_area,
@@ -101,7 +104,61 @@ def test_fetch_rejects_long_range():
         )
         assert False, "expected FirmsApiError"
     except FirmsApiError as exc:
-        assert "10" in str(exc)
+        assert str(MAX_DAY_RANGE) in str(exc)
+
+
+def test_nrt_day_chunks_covers_ten_days():
+    end = date(2026, 11, 14)
+    start = end - timedelta(days=MAX_DAY_RANGE - 1)
+    chunks = _nrt_day_chunks(start, end, API_DAY_CHUNK)
+    assert chunks
+    assert all(days <= API_DAY_CHUNK for _, _, days in chunks)
+    covered = set()
+    for c_start, c_end, _days in chunks:
+        d = c_start
+        while d <= c_end:
+            covered.add(d)
+            d += timedelta(days=1)
+    expected = {start + timedelta(days=i) for i in range(MAX_DAY_RANGE)}
+    assert covered == expected
+
+
+def test_fetch_ten_day_window_chunks_requests():
+    """10-day window must issue multiple ≤API_DAY_CHUNK calls per sensor."""
+    end = date.today()
+    start = end - timedelta(days=MAX_DAY_RANGE - 1)
+    day = end.isoformat()
+    csv_body = (
+        "latitude,longitude,acq_date,acq_time,confidence,satellite\n"
+        f"38.4,27.1,{day},1345,85,Terra\n"
+    )
+    calls: list[str] = []
+
+    def fake_get(url, timeout=60.0):
+        calls.append(url)
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.text = csv_body
+        return resp
+
+    with patch("src.firms_api.requests.get", side_effect=fake_get):
+        df = fetch_firms_area(
+            "dummy-key",
+            26.0,
+            36.0,
+            30.0,
+            40.0,
+            start,
+            end,
+            sensors=("MODIS_NRT",),
+        )
+    assert not df.empty
+    # One sensor × ceil(10/5) chunks
+    expected_chunks = len(_nrt_day_chunks(start, end, API_DAY_CHUNK))
+    assert len(calls) == expected_chunks
+    for url in calls:
+        day_range = int(url.rstrip("/").split("/")[-2])
+        assert 1 <= day_range <= API_DAY_CHUNK
 
 
 def test_fetch_sensor_mocked_success():
@@ -201,6 +258,8 @@ if __name__ == "__main__":
     test_parse_empty()
     test_fetch_requires_key()
     test_fetch_rejects_long_range()
+    test_nrt_day_chunks_covers_ten_days()
+    test_fetch_ten_day_window_chunks_requests()
     test_fetch_sensor_mocked_success()
     test_fetch_multi_sensor_concat_defaults()
     test_key_not_in_http_error_message()
