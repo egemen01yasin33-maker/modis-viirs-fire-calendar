@@ -76,7 +76,7 @@ time window.
 
 ## Pitch deck (NASA Space Apps)
 
-Fullscreen HTML slides (Turkish + technical English terms):
+7-slide fullscreen HTML deck (Turkish + technical English terms):
 
 ```bash
 python3 -m http.server 8765 --bind 127.0.0.1 --directory presentation
