@@ -102,11 +102,6 @@ st.markdown(
 )
 
 
-def _is_hosted_deploy() -> bool:
-    """True on Cursor/Vercel hosted runtimes (not local .env development)."""
-    return bool(os.getenv("CURSOR_APP_ID") or os.getenv("VERCEL"))
-
-
 def get_firms_map_key() -> str:
     """
     MAP_KEY for live NRT — only from host env (Cursor secret / .env).
