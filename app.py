@@ -10,6 +10,7 @@ FIRMS_MAP_KEY is loaded from .env for NRT mode only.
 from __future__ import annotations
 
 import os
+import time
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -30,6 +31,8 @@ from src.analytics import (
 )
 from src.archive_csv import (
     ArchiveCsvError,
+    MAX_UPLOAD_BYTES,
+    MAX_UPLOAD_FILES,
     data_dir,
     describe_csv_files,
     ensure_hotspots_db,
@@ -68,6 +71,19 @@ ROOT = Path(__file__).resolve().parent
 load_dotenv(ROOT / ".env")
 DATA_PATH = data_dir(ROOT)
 
+# NRT abuse guards — host MAP_KEY must not be an unbounded public proxy
+NRT_MAX_FETCHES_PER_SESSION = 5
+NRT_MIN_SECONDS_BETWEEN_FETCHES = 20
+
+
+def active_data_path() -> Path:
+    """Archive root for this session (shared data/ or per-visitor uploads)."""
+    override = st.session_state.get("archive_root")
+    if override:
+        return Path(override)
+    return DATA_PATH
+
+
 st.set_page_config(
     page_title="Unified Fire Activity Calendar",
     layout="wide",
@@ -86,9 +102,122 @@ st.markdown(
 )
 
 
+def _is_hosted_deploy() -> bool:
+    """True on Cursor/Vercel hosted runtimes (not local .env development)."""
+    return bool(os.getenv("CURSOR_APP_ID") or os.getenv("VERCEL"))
+
+
+def _allow_host_map_key() -> bool:
+    """
+    Host FIRMS_MAP_KEY is for local/dev by default.
+
+    On a hosted deploy it stays off unless FIRMS_ALLOW_HOST_KEY is explicitly set,
+    so anonymous visitors cannot burn the operator quota.
+    """
+    flag = (os.getenv("FIRMS_ALLOW_HOST_KEY") or "").strip().lower()
+    if flag in {"1", "true", "yes", "on"}:
+        return True
+    if flag in {"0", "false", "no", "off"}:
+        return False
+    return not _is_hosted_deploy()
+
+
 def get_firms_map_key() -> str:
-    """Read FIRMS_MAP_KEY from the environment (value is never logged)."""
+    """
+    Resolve MAP_KEY for NRT calls.
+
+    Prefer a session-entered key. The host env key is only used when allowed
+    (local/dev, or FIRMS_ALLOW_HOST_KEY). Value is never logged.
+    """
+    session_key = (st.session_state.get("visitor_map_key") or "").strip()
+    if session_key:
+        return session_key
+    if not _allow_host_map_key():
+        return ""
     return (os.getenv("FIRMS_MAP_KEY") or "").strip()
+
+
+def _session_id() -> str:
+    try:
+        from streamlit.runtime.scriptrunner import get_script_run_ctx
+
+        ctx = get_script_run_ctx()
+        if ctx and getattr(ctx, "session_id", None):
+            return str(ctx.session_id)
+    except Exception:  # noqa: BLE001
+        pass
+    return "local"
+
+
+def session_upload_dir() -> Path:
+    """Per-visitor upload folder so archives are not a shared mutable bucket."""
+    safe_id = "".join(c if c.isalnum() or c in "-_" else "_" for c in _session_id())[
+        :64
+    ]
+    path = (DATA_PATH / "_uploads" / safe_id).resolve()
+    path.mkdir(parents=True, exist_ok=True)
+    # Stay under data/ even if session_id were hostile
+    data_root = DATA_PATH.resolve()
+    if path != data_root and data_root not in path.parents:
+        raise ArchiveCsvError("Invalid upload directory.")
+    return path
+
+
+def _nrt_rate_limit_ok() -> tuple[bool, str]:
+    """Session rate limit for outbound FIRMS Area API calls."""
+    now = time.monotonic()
+    stamps: list[float] = list(st.session_state.get("nrt_fetch_times") or [])
+    stamps = [t for t in stamps if now - t < 3600]
+    if len(stamps) >= NRT_MAX_FETCHES_PER_SESSION:
+        return (
+            False,
+            f"Live FIRMS limit reached ({NRT_MAX_FETCHES_PER_SESSION} fetches / session).",
+        )
+    if stamps and (now - stamps[-1]) < NRT_MIN_SECONDS_BETWEEN_FETCHES:
+        wait = int(NRT_MIN_SECONDS_BETWEEN_FETCHES - (now - stamps[-1])) + 1
+        return False, f"Please wait {wait}s before another live FIRMS request."
+    return True, ""
+
+
+def _record_nrt_fetch() -> None:
+    now = time.monotonic()
+    stamps: list[float] = list(st.session_state.get("nrt_fetch_times") or [])
+    stamps.append(now)
+    st.session_state.nrt_fetch_times = stamps[-NRT_MAX_FETCHES_PER_SESSION :]
+
+
+def render_map_key_input() -> None:
+    """Optional visitor MAP_KEY (session-only); never echoed back to logs."""
+    with st.expander("FIRMS MAP_KEY (optional, session only)", expanded=False):
+        st.caption(
+            "Enter your own NASA FIRMS MAP_KEY for live NRT. "
+            "It stays in this browser session and is not written to disk."
+        )
+        entered = st.text_input(
+            "MAP_KEY",
+            value="",
+            type="password",
+            key="visitor_map_key_input",
+            autocomplete="off",
+        )
+        if entered.strip():
+            st.session_state.visitor_map_key = entered.strip()
+        elif "visitor_map_key" not in st.session_state:
+            st.session_state.visitor_map_key = ""
+
+
+def guard_nrt_fetch(map_key: str) -> bool:
+    """Return True if an NRT fetch may proceed; otherwise show a warning."""
+    if not map_key:
+        st.warning(
+            "Live FIRMS needs a MAP_KEY — enter yours above, or set FIRMS_MAP_KEY locally."
+        )
+        return False
+    ok, reason = _nrt_rate_limit_ok()
+    if not ok:
+        st.warning(reason)
+        return False
+    return True
 
 
 def _map_zoom_for_bbox(
@@ -759,7 +888,7 @@ def _cached_mtimes_key() -> tuple:
     cached = st.session_state.get("_archive_mtimes")
     if cached is not None:
         return cached
-    key = _archive_mtimes_key(DATA_PATH)
+    key = _archive_mtimes_key(active_data_path())
     st.session_state._archive_mtimes = key
     return key
 
@@ -1294,7 +1423,7 @@ def render_map_focus_panel(
         min_lon, min_lat, max_lon, max_lat = (float(x) for x in bbox)
         try:
             payload = load_map_slice(
-                str(DATA_PATH),
+                str(active_data_path()),
                 _cached_mtimes_key(),
                 min_lon,
                 min_lat,
@@ -1705,24 +1834,24 @@ def run_archive_pipeline(controls: dict) -> str | None:
         return None
 
     if st.session_state.get("_archive_mtimes") is None:
-        st.session_state._archive_mtimes = _archive_mtimes_key(DATA_PATH)
+        st.session_state._archive_mtimes = _archive_mtimes_key(active_data_path())
     mtimes = st.session_state._archive_mtimes
     start_iso = controls["start_date"].isoformat()
     end_iso = controls["end_date"].isoformat()
 
     try:
-        _, rebuilt = ensure_hotspots_db(DATA_PATH)
+        _, rebuilt = ensure_hotspots_db(active_data_path())
     except ArchiveCsvError as exc:
         st.error(str(exc))
         return None
     if rebuilt:
-        st.session_state._archive_mtimes = _archive_mtimes_key(DATA_PATH)
+        st.session_state._archive_mtimes = _archive_mtimes_key(active_data_path())
         mtimes = st.session_state._archive_mtimes
         st.toast("Archive index ready.")
 
     try:
         payload = load_archive_slice(
-            str(DATA_PATH),
+            str(active_data_path()),
             mtimes,
             min_lon,
             min_lat,
@@ -1799,8 +1928,7 @@ def run_archive_pipeline(controls: dict) -> str | None:
         ):
             if cmp_source == "nrt":
                 map_key = get_firms_map_key()
-                if not map_key:
-                    st.warning("Live compare needs FIRMS_MAP_KEY in .env.")
+                if not guard_nrt_fetch(map_key):
                     cmp_payload = None
                 else:
                     try:
@@ -1813,6 +1941,7 @@ def run_archive_pipeline(controls: dict) -> str | None:
                             controls["compare_start"],
                             controls["compare_end"],
                         )
+                        _record_nrt_fetch()
                         cmp_payload = {
                             "harmonized": secondary,
                             "raw_rows": int(len(secondary)),
@@ -1826,7 +1955,7 @@ def run_archive_pipeline(controls: dict) -> str | None:
             else:
                 try:
                     cmp_payload = load_archive_slice(
-                        str(DATA_PATH),
+                        str(active_data_path()),
                         mtimes,
                         min_lon,
                         min_lat,
@@ -1862,6 +1991,10 @@ def run_archive_pipeline(controls: dict) -> str | None:
 
 def run_nrt_pipeline(controls: dict, map_key: str) -> None:
     """Fetch NRT API data into session results."""
+    if not guard_nrt_fetch(map_key):
+        st.session_state.harmonized = None
+        st.session_state.comparison = None
+        return
     try:
         region_label, min_lon, min_lat, max_lon, max_lat = resolve_controls_bbox(
             controls
@@ -1883,6 +2016,7 @@ def run_nrt_pipeline(controls: dict, map_key: str) -> None:
                 controls["start_date"],
                 controls["end_date"],
             )
+            _record_nrt_fetch()
         except FirmsApiError as exc:
             st.error(str(exc))
             st.session_state.harmonized = None
@@ -2023,18 +2157,31 @@ def main() -> None:
         st.session_state.last_meta = None
         st.session_state.comparison = None
         st.session_state.comparison_meta = None
+        st.session_state.nrt_fetch_times = []
+        st.session_state.visitor_map_key = ""
 
-    inventory = describe_csv_files(DATA_PATH)
-    archive_date_min, archive_date_max = peek_archive_date_bounds(DATA_PATH)
+    render_map_key_input()
+
+    # Prefer session uploads when present; otherwise shared operator archive
+    upload_dir = session_upload_dir()
+    session_inventory = describe_csv_files(upload_dir)
+    archive_root = upload_dir if session_inventory else DATA_PATH
+    inventory = describe_csv_files(archive_root)
+    archive_date_min, archive_date_max = peek_archive_date_bounds(archive_root)
     map_key = get_firms_map_key()
     has_archive = bool(inventory)
     has_nrt = bool(map_key)
 
     if not has_archive and not has_nrt:
         st.warning(
-            "No fire archive found and live data needs a FIRMS key in .env."
+            "No fire archive found. Upload CSVs or enter a FIRMS MAP_KEY for live data."
         )
         with st.expander("Add archive files"):
+            st.caption(
+                f"Up to {MAX_UPLOAD_FILES} CSV files, "
+                f"{MAX_UPLOAD_BYTES // (1024 * 1024)} MiB each. "
+                "Saved only for this session."
+            )
             uploads = st.file_uploader(
                 "Upload CSV",
                 type=["csv"],
@@ -2042,11 +2189,17 @@ def main() -> None:
                 label_visibility="collapsed",
             )
             if uploads:
-                save_uploaded_csvs(DATA_PATH, uploads)
+                try:
+                    save_uploaded_csvs(upload_dir, uploads)
+                except ArchiveCsvError as exc:
+                    st.error(str(exc))
+                    return
                 load_archive_slice.clear()
                 load_map_slice.clear()
                 st.rerun()
         return
+
+    st.session_state.archive_root = str(archive_root)
 
     if has_archive:
         if archive_date_min and archive_date_max:

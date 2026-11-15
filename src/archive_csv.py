@@ -7,6 +7,8 @@ so Streamlit never materializes the full worldwide year in memory.
 
 from __future__ import annotations
 
+import hashlib
+import re
 from datetime import date, datetime
 from pathlib import Path
 from typing import Iterable
@@ -29,6 +31,37 @@ CHUNK_SIZE = 250_000
 MAX_FILTERED_ROWS = 80_000
 # Tiny fixtures kept in data/ for unit tests — skip in Archive mode inventory
 SKIP_FILENAMES = frozenset({"sample_firms.csv"})
+# Visitor uploads: strict names + size caps (never interpolate raw names into SQL)
+SAFE_CSV_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,120}\.csv$", re.IGNORECASE)
+MAX_UPLOAD_BYTES = 40 * 1024 * 1024  # 40 MiB per file
+MAX_UPLOAD_FILES = 3
+
+
+def safe_csv_filename(raw_name: str, *, content: bytes | None = None) -> str:
+    """
+    Return a filesystem-safe *.csv basename.
+
+    Only allowlisted characters are kept. Unsafe or empty names become a
+    content-hash fallback so uploads cannot inject SQL/path metacharacters.
+    """
+    base = Path(raw_name or "").name
+    if not base.lower().endswith(".csv"):
+        base = f"{base}.csv" if base else "upload.csv"
+    if SAFE_CSV_NAME_RE.fullmatch(base):
+        return base
+    digest = hashlib.sha256(content or base.encode("utf-8", errors="replace")).hexdigest()[
+        :12
+    ]
+    return f"upload_{digest}.csv"
+
+
+def assert_path_inside(folder: Path, candidate: Path) -> Path:
+    """Resolve candidate and ensure it stays under folder (no traversal)."""
+    root = folder.resolve()
+    path = candidate.resolve()
+    if path != root and root not in path.parents:
+        raise ArchiveCsvError("Refusing path outside the data folder.")
+    return path
 # Columns needed for harmonization + map (keep the query narrow/fast)
 QUERY_COLUMNS = (
     "latitude",
@@ -267,7 +300,8 @@ def ensure_parquet_cache(folder: Path) -> tuple[list[Path], int]:
     paths: list[Path] = []
 
     for csv_path in files:
-        pq_path = out_dir / f"{csv_path.stem}.parquet"
+        safe_stem = Path(safe_csv_filename(csv_path.name)).stem
+        pq_path = out_dir / f"{safe_stem}.parquet"
         needs = (
             not pq_path.exists()
             or pq_path.stat().st_mtime_ns < csv_path.stat().st_mtime_ns
@@ -278,21 +312,25 @@ def ensure_parquet_cache(folder: Path) -> tuple[list[Path], int]:
             missing = validate_firms_columns(header)
             if missing:
                 continue
-            src_name = csv_path.name.replace("'", "''")
+            # Bound parameters only — never interpolate paths/names into SQL text
+            src_name = safe_csv_filename(csv_path.name)
+            csv_abs = assert_path_inside(folder, csv_path).as_posix()
+            pq_abs = assert_path_inside(out_dir, pq_path).as_posix()
             con.execute(
-                f"""
+                """
                 COPY (
                   SELECT
                     *,
-                    '{src_name}' AS archive_file
+                    ?::VARCHAR AS archive_file
                   FROM read_csv_auto(
-                    '{csv_path.as_posix()}',
+                    ?,
                     header=true,
                     sample_size=-1
                   )
-                ) TO '{pq_path.as_posix()}'
+                ) TO ?
                   (FORMAT PARQUET, COMPRESSION ZSTD)
-                """
+                """,
+                [src_name, csv_abs, pq_abs],
             )
             rebuilt += 1
         if pq_path.exists():
@@ -323,7 +361,8 @@ def ensure_hotspots_db(folder: Path) -> tuple[Path, bool]:
     # Older parquet without archive_file → rebuild
     probe_con = duckdb.connect()
     probe = probe_con.execute(
-        f"DESCRIBE SELECT * FROM read_parquet('{parquet_paths[0].as_posix()}')"
+        "DESCRIBE SELECT * FROM read_parquet(?)",
+        [parquet_paths[0].as_posix()],
     ).fetchdf()
     probe_con.close()
     cols = {str(c).lower() for c in probe["column_name"].tolist()}
@@ -990,16 +1029,29 @@ def save_uploaded_csvs(folder: Path, uploads) -> list[str]:
     """
     Save Streamlit UploadedFile objects into folder.
 
+    Names are force-sanitized; per-file and per-batch size caps apply.
     Returns list of saved filenames. Overwrites same-named files.
     """
     folder.mkdir(parents=True, exist_ok=True)
+    batch = list(uploads or [])
+    if len(batch) > MAX_UPLOAD_FILES:
+        raise ArchiveCsvError(
+            f"Too many files (max {MAX_UPLOAD_FILES} per upload)."
+        )
     saved: list[str] = []
-    for upload in uploads or []:
-        name = Path(getattr(upload, "name", "") or "upload.csv").name
-        if not name.lower().endswith(".csv"):
-            name = f"{name}.csv"
-        dest = folder / name
-        dest.write_bytes(upload.getbuffer())
+    for upload in batch:
+        raw_name = getattr(upload, "name", "") or "upload.csv"
+        buffer = upload.getbuffer()
+        data = bytes(buffer)
+        if len(data) > MAX_UPLOAD_BYTES:
+            raise ArchiveCsvError(
+                f"File too large (max {MAX_UPLOAD_BYTES // (1024 * 1024)} MiB each)."
+            )
+        if len(data) == 0:
+            raise ArchiveCsvError("Empty CSV upload rejected.")
+        name = safe_csv_filename(raw_name, content=data)
+        dest = assert_path_inside(folder, folder / name)
+        dest.write_bytes(data)
         saved.append(name)
     return saved
 
