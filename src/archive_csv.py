@@ -26,9 +26,11 @@ DATA_DIRNAME = "data"
 CACHE_DIRNAME = "_cache"
 DB_FILENAME = "fires.duckdb"
 CHUNK_SIZE = 250_000
-# Map load budget — show every point below this; above it, priority-sample.
+# Map load budget — browser paints ~3k markers; matching skips above 8k.
 # Charts still use full-range SQL aggregates (exact totals).
-MAX_FILTERED_ROWS = 80_000
+MAX_FILTERED_ROWS = 8_000
+# Above this total CSV size, never fall back to pandas chunk scans.
+CSV_FALLBACK_MAX_BYTES = 200 * 1024 * 1024
 # Tiny fixtures kept in data/ for unit tests — skip in Archive mode inventory
 SKIP_FILENAMES = frozenset({"sample_firms.csv"})
 # Visitor uploads: strict names + size caps (never interpolate raw names into SQL)
@@ -394,6 +396,7 @@ def ensure_hotspots_db(folder: Path) -> tuple[Path, bool]:
         if path.exists():
             path.unlink()
         con = duckdb.connect(path.as_posix())
+        # No ORDER BY — sorting ~80M rows on create freezes the UI for minutes.
         con.execute(
             """
             CREATE TABLE hotspots AS
@@ -408,10 +411,17 @@ def ensure_hotspots_db(folder: Path) -> tuple[Path, bool]:
               TRY_CAST(frp AS DOUBLE) AS frp,
               CAST(archive_file AS VARCHAR) AS archive_file
             FROM read_parquet(?, union_by_name=true)
-            ORDER BY acq_date, longitude, latitude
             """,
             [[p.as_posix() for p in parquet_paths]],
         )
+        try:
+            con.execute("CREATE INDEX IF NOT EXISTS idx_hotspots_date ON hotspots(acq_date)")
+            con.execute(
+                "CREATE INDEX IF NOT EXISTS idx_hotspots_lonlat "
+                "ON hotspots(longitude, latitude)"
+            )
+        except Exception:  # noqa: BLE001
+            pass
         con.execute("CHECKPOINT")
         con.close()
         return path, True
@@ -463,8 +473,15 @@ def load_filtered_csvs(
         )
     except ArchiveCsvError:
         raise
-    except Exception:
-        # Fall back to pandas chunk scan (slower but dependency-light)
+    except Exception as exc:
+        total_bytes = sum(p.stat().st_size for p in files if p.is_file())
+        if total_bytes > CSV_FALLBACK_MAX_BYTES:
+            raise ArchiveCsvError(
+                "Archive cache is rebuilding or unavailable. "
+                "Wait a moment and refresh — multi-GB CSV fallback is disabled "
+                "to keep the UI responsive."
+            ) from exc
+        # Small archives only: pandas chunk scan
         return _load_filtered_pandas(
             files,
             min_lon=min_lon,
@@ -562,13 +579,10 @@ def _load_filtered_duckdb(
                 where_params,
             ).df()
         else:
-            # Above threshold: ~half highest-FRP, ~half spatial coverage
-            # (still capped at max_rows). Matched ranking happens after classify.
+            # Cheap sample for huge selections: top FRP + hash-spread fill.
+            # Avoids PARTITION BY ROW_NUMBER over tens of millions of rows.
             n_frp = max(max_rows // 2, 1)
-            n_grid = max(max_rows - n_frp, 1)
-            cell, per_cell = _map_sample_grid(
-                min_lon, min_lat, max_lon, max_lat, total_n, n_grid
-            )
+            n_spread = max(max_rows - n_frp, 1)
             top = con.execute(
                 f"""
                 SELECT {select_sql}
@@ -579,35 +593,21 @@ def _load_filtered_duckdb(
                 """,
                 [*where_params, n_frp],
             ).df()
-            grid = con.execute(
+            spread = con.execute(
                 f"""
                 SELECT {select_sql}
-                FROM (
-                  SELECT
-                    latitude, longitude, acq_date, acq_time, satellite,
-                    instrument, confidence, coalesce(frp, 0)::DOUBLE AS frp,
-                    archive_file,
-                    ROW_NUMBER() OVER (
-                      PARTITION BY
-                        CAST(floor(latitude / ?) AS INTEGER),
-                        CAST(floor(longitude / ?) AS INTEGER)
-                      ORDER BY coalesce(frp, 0) DESC NULLS LAST,
-                               hash(acq_time, satellite)
-                    ) AS rn
-                  FROM hotspots
-                  WHERE {where_sql}
-                ) AS gridded
-                WHERE rn <= ?
-                ORDER BY hash(latitude * 1000, longitude * 1000)
+                FROM hotspots
+                WHERE {where_sql}
+                ORDER BY hash(latitude, longitude, acq_date, acq_time)
                 LIMIT ?
                 """,
-                [cell, cell, *where_params, per_cell, n_grid],
+                [*where_params, n_spread * 2],
             ).df()
-            if top.empty and grid.empty:
+            if top.empty and spread.empty:
                 df = pd.DataFrame()
             else:
                 df = (
-                    pd.concat([top, grid], ignore_index=True)
+                    pd.concat([top, spread], ignore_index=True)
                     .drop_duplicates(
                         subset=[
                             "latitude",
@@ -619,46 +619,10 @@ def _load_filtered_duckdb(
                         keep="first",
                     )
                 )
-                # Fill remaining budget with next-highest FRP rows
-                if len(df) < max_rows:
-                    more = con.execute(
-                        f"""
-                        SELECT {select_sql}
-                        FROM hotspots
-                        WHERE {where_sql}
-                        ORDER BY coalesce(frp, 0) DESC NULLS LAST
-                        LIMIT ?
-                        """,
-                        [*where_params, max_rows],
-                    ).df()
-                    df = (
-                        pd.concat([df, more], ignore_index=True)
-                        .drop_duplicates(
-                            subset=[
-                                "latitude",
-                                "longitude",
-                                "acq_date",
-                                "acq_time",
-                                "satellite",
-                            ],
-                            keep="first",
-                        )
-                    )
                 if "frp" in df.columns:
                     df = df.sort_values("frp", ascending=False, na_position="last")
                 if len(df) > max_rows:
                     df = df.iloc[:max_rows].copy()
-            if len(df) < min(max_rows // 5, 2_000):
-                df = con.execute(
-                    f"""
-                    SELECT {select_sql}
-                    FROM hotspots
-                    WHERE {where_sql}
-                    ORDER BY coalesce(frp, 0) DESC NULLS LAST
-                    LIMIT ?
-                    """,
-                    [*where_params, max_rows],
-                ).df()
     finally:
         con.close()
 
@@ -734,20 +698,6 @@ def load_daily_activity(
             """,
             [start_s, end_s, min_lon, max_lon, min_lat, max_lat],
         ).df()
-        frp_row = con.execute(
-            """
-            SELECT
-              count(*)::BIGINT AS n,
-              coalesce(sum(frp), 0)::DOUBLE AS frp_sum
-            FROM hotspots
-            WHERE acq_date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
-              AND longitude BETWEEN ? AND ?
-              AND latitude BETWEEN ? AND ?
-            """,
-            [start_s, end_s, min_lon, max_lon, min_lat, max_lat],
-        ).fetchone()
-        total_count = int(frp_row[0] or 0)
-        frp_total = float(frp_row[1] or 0.0)
     finally:
         con.close()
 
@@ -778,6 +728,9 @@ def load_daily_activity(
     daily[MATCHED] = 0
     daily["total"] = daily["total"].astype(int)
     daily["frp_sum"] = daily["frp_sum"].astype(float)
+    # Derive totals from the same scan — no second full-table pass
+    total_count = int(daily["total"].sum())
+    frp_total = float(daily["frp_sum"].sum())
     positive = daily.loc[daily["total"] > 0, "total"]
     mean_total = float(positive.mean()) if len(positive) else 0.0
     threshold = mean_total * 2.0

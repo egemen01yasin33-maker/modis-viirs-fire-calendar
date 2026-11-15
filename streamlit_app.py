@@ -39,7 +39,6 @@ from src.archive_csv import (
     list_archive_csv_files,
     load_daily_activity,
     load_filtered_csvs,
-    load_monthly_activity,
     peek_archive_date_bounds,
     save_uploaded_csvs,
 )
@@ -200,9 +199,9 @@ def _is_wide_bbox(
     return (max_lon - min_lon) >= 120 or (max_lat - min_lat) >= 100
 
 
-# Map budgets — charts stay exact via DuckDB; the browser cannot paint 80k markers.
-MAP_FULL_THRESHOLD = 80_000  # load every row when the selection is smaller
-MAX_MAP_LOAD = MAP_FULL_THRESHOLD
+# Map budgets — charts stay exact via DuckDB; Plotly paints ~3k markers.
+MAP_FULL_THRESHOLD = 8_000  # load every row when the selection is smaller
+MAX_MAP_LOAD = 8_000  # hard DuckDB pull cap (was 80k — froze Global views)
 MAX_MAP_RENDER = 3_000  # hard Plotly paint cap (Matched + high FRP first)
 MAX_CHART_ANOMALIES = 15
 MAX_CHART_POINTS = 180
@@ -219,11 +218,9 @@ def _map_load_budget(
     *,
     known_total: int = 0,
 ) -> int:
-    """Load all rows under the threshold; otherwise cap the DuckDB pull."""
+    """Cap DuckDB map pulls; never exceed MAX_MAP_LOAD."""
     if known_total and 0 < known_total <= MAP_FULL_THRESHOLD:
         return int(known_total)
-    if known_total and known_total > MAP_FULL_THRESHOLD:
-        return MAX_MAP_LOAD
     return MAX_MAP_LOAD
 
 
@@ -819,6 +816,32 @@ def _downsample_chart_daily(daily: pd.DataFrame, max_points: int = MAX_CHART_POI
     return out
 
 
+def _monthly_from_daily(daily: pd.DataFrame) -> pd.DataFrame:
+    """Aggregate daily totals to month starts with pct-change columns."""
+    empty = pd.DataFrame(
+        columns=[
+            "period",
+            "total",
+            "frp_sum",
+            "pct_change_total",
+            "pct_change_frp",
+        ]
+    )
+    if daily is None or daily.empty or "period" not in daily.columns:
+        return empty
+    work = daily[["period", "total", "frp_sum"]].copy()
+    work["period"] = pd.to_datetime(work["period"])
+    monthly = (
+        work.set_index("period")
+        .resample("MS")
+        .agg({"total": "sum", "frp_sum": "sum"})
+        .reset_index()
+    )
+    monthly["pct_change_total"] = monthly["total"].pct_change() * 100.0
+    monthly["pct_change_frp"] = monthly["frp_sum"].pct_change() * 100.0
+    return monthly
+
+
 def _trim_map_columns(harmonized: pd.DataFrame) -> pd.DataFrame:
     keep = [
         c
@@ -944,15 +967,8 @@ def load_archive_slice(
         start=start_iso,
         end=end_iso,
     )
-    monthly = load_monthly_activity(
-        folder,
-        min_lon=min_lon,
-        min_lat=min_lat,
-        max_lon=max_lon,
-        max_lat=max_lat,
-        start=start_iso,
-        end=end_iso,
-    )
+    # Monthly from daily in memory — avoids a second multi-year table scan
+    monthly = _monthly_from_daily(daily)
     known_total = int(daily_stats.get("total_count") or 0)
     map_payload = load_map_slice(
         folder_str,
@@ -1374,7 +1390,29 @@ def render_map_focus_panel(
 
     focused = harmonized_fallback if harmonized_fallback is not None else pd.DataFrame()
     map_stats: dict = {}
-    if use_archive_map and bbox is not None:
+    # Prefer in-memory filter on the already-loaded sample — slider must not
+    # re-hit DuckDB (that was freezing Global / multi-year views).
+    if (
+        harmonized_fallback is not None
+        and not harmonized_fallback.empty
+        and "acq_datetime" in harmonized_fallback.columns
+    ):
+        mask = (
+            (harmonized_fallback["acq_datetime"] >= pd.Timestamp(cur_start))
+            & (
+                harmonized_fallback["acq_datetime"]
+                < pd.Timestamp(cur_end) + pd.Timedelta(days=1)
+            )
+        )
+        focused = harmonized_fallback.loc[mask]
+        if focused.empty:
+            focused = harmonized_fallback
+        map_stats = {
+            "rows_kept": int(len(focused)),
+            "truncated": exact_total > len(focused),
+            "engine": "memory-focus",
+        }
+    elif use_archive_map and bbox is not None:
         min_lon, min_lat, max_lon, max_lat = (float(x) for x in bbox)
         try:
             payload = load_map_slice(
@@ -1386,44 +1424,14 @@ def render_map_focus_panel(
                 max_lat,
                 cur_start.isoformat(),
                 cur_end.isoformat(),
-                0,  # recount for this focus window (fast; avoids stale totals)
-                _map_load_budget(bbox, known_total=0),
+                exact_total or 0,
+                _map_load_budget(bbox, known_total=exact_total or 0),
             )
             if payload.get("harmonized") is not None:
                 focused = payload["harmonized"]
             map_stats = payload.get("stats") or {}
         except Exception:  # noqa: BLE001
-            if (
-                harmonized_fallback is not None
-                and not harmonized_fallback.empty
-                and "acq_datetime" in harmonized_fallback.columns
-            ):
-                mask = (
-                    (harmonized_fallback["acq_datetime"] >= pd.Timestamp(cur_start))
-                    & (
-                        harmonized_fallback["acq_datetime"]
-                        < pd.Timestamp(cur_end) + pd.Timedelta(days=1)
-                    )
-                )
-                focused = harmonized_fallback.loc[mask]
-                if focused.empty:
-                    focused = harmonized_fallback
-    elif (
-        harmonized_fallback is not None
-        and not harmonized_fallback.empty
-        and "acq_datetime" in harmonized_fallback.columns
-    ):
-        # NRT / in-memory path: filter the fetched frame to the focus window
-        mask = (
-            (harmonized_fallback["acq_datetime"] >= pd.Timestamp(cur_start))
-            & (
-                harmonized_fallback["acq_datetime"]
-                < pd.Timestamp(cur_end) + pd.Timedelta(days=1)
-            )
-        )
-        focused = harmonized_fallback.loc[mask]
-        if focused.empty:
-            focused = harmonized_fallback
+            focused = pd.DataFrame()
 
     map_n = int(len(focused)) if focused is not None else 0
     scanned_n = int(map_stats.get("rows_scanned") or exact_total or map_n)
