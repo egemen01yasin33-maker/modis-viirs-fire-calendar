@@ -122,7 +122,8 @@
     }
     .source { color: var(--cyan); font-size: 0.85rem; margin: 0.25rem 0 0.75rem; }
     h2 { font-size: 1rem; margin: 1rem 0 0.45rem; }
-    #map { height: 420px; width: 100%; background: #0a1016; border: 1px solid var(--line); }
+    #map { height: 460px; width: 100%; background: #0a1016; border: 1px solid var(--line); }
+    .map-caption { color: var(--muted); font-size: 0.8rem; margin: 0.35rem 0 0; }
     #chart-wrap { height: 260px; position: relative; }
     .legend { display: flex; flex-wrap: wrap; gap: 0.7rem; margin: 0.35rem 0 0.6rem; font-size: 0.8rem; color: var(--muted); }
     .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; margin-right: 0.3rem; }
@@ -297,8 +298,9 @@
     <h2>Activity</h2>
     <div class="panel"><div id="chart-wrap"><canvas id="chart"></canvas></div></div>
 
-    <h2>Map</h2>
+    <h2>Map — hotspot points</h2>
     <div id="map"></div>
+    <p class="map-caption" id="map-caption">Loading points…</p>
 
     <script type="application/json" id="points-data">{{ result.points_json | safe }}</script>
     <script type="application/json" id="series-data">{{ result.series_json | safe }}</script>
@@ -472,24 +474,47 @@
       }
 
       if (window.L) {
-        const map = L.map("map", { scrollWheelZoom: false });
-        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        const map = L.map("map", {
+          scrollWheelZoom: true,
+          preferCanvas: true,
+        });
+        // Dark basemap so teal/cyan hotspot points stay readable
+        L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
           maxZoom: 18,
-          attribution: "&copy; OpenStreetMap",
+          attribution: "&copy; OpenStreetMap &copy; CARTO",
         }).addTo(map);
 
+        const canvasRenderer = L.canvas({ padding: 0.5 });
         const layer = L.layerGroup().addTo(map);
+
+        function pointRadius(frp) {
+          if (frp == null || Number.isNaN(frp)) return 5;
+          // FRP-scaled dots: ~5–14 px so individual fires read as points
+          return Math.max(5, Math.min(14, 4 + Math.sqrt(Math.max(frp, 0)) * 0.35));
+        }
+
         for (const p of points) {
-          const frpTxt = (p.frp != null && !Number.isNaN(p.frp))
-            ? `<br>FRP: ${Number(p.frp).toFixed(1)} MW`
+          const frp = p.frp;
+          const frpTxt = (frp != null && !Number.isNaN(frp))
+            ? `<br>FRP: ${Number(frp).toFixed(1)} MW`
             : "";
           L.circleMarker([p.lat, p.lon], {
-            radius: 4,
-            color: p.color,
-            fillColor: p.color,
-            fillOpacity: 0.85,
+            renderer: canvasRenderer,
+            radius: pointRadius(frp),
+            color: "#041016",
             weight: 1,
-          }).addTo(layer).bindPopup(`${p.c || "hotspot"}${frpTxt}`);
+            fillColor: p.color || "#00e5d4",
+            fillOpacity: 0.92,
+          }).addTo(layer).bindPopup(
+            `<strong>${p.c || "Hotspot"}</strong>${frpTxt}<br>${Number(p.lat).toFixed(4)}, ${Number(p.lon).toFixed(4)}`
+          );
+        }
+
+        const cap = document.getElementById("map-caption");
+        if (cap) {
+          cap.textContent = points.length
+            ? `${points.length.toLocaleString()} hotspot points on map (Matched / MODIS-only / VIIRS-only). Click a point for FRP.`
+            : "No hotspot points in this window — try another region or date range.";
         }
 
         let fit = null;
@@ -504,12 +529,13 @@
         }
         if (points.length) {
           const pb = L.latLngBounds(points.map((p) => [p.lat, p.lon]));
-          fit = fit ? fit.extend(pb) : pb;
+          // Prefer point cloud bounds so dots fill the view (not an empty wide bbox)
+          fit = pb;
         }
         if (fit && fit.isValid()) {
-          map.fitBounds(fit.pad(0.08), { maxZoom: 10, animate: false });
+          map.fitBounds(fit.pad(0.12), { maxZoom: 11, animate: false });
         } else {
-          map.setView(meta.center || [38, 35], meta.zoom || 5);
+          map.setView(meta.center || [38, 35], meta.zoom || 6);
         }
         setTimeout(() => map.invalidateSize(), 80);
         setTimeout(() => map.invalidateSize(), 400);
