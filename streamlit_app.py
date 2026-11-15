@@ -107,34 +107,12 @@ def _is_hosted_deploy() -> bool:
     return bool(os.getenv("CURSOR_APP_ID") or os.getenv("VERCEL"))
 
 
-def _allow_host_map_key() -> bool:
-    """
-    Use host FIRMS_MAP_KEY (Cursor secret / .env) unless explicitly disabled.
-
-    Rate limits still cap live FIRMS calls. Set FIRMS_ALLOW_HOST_KEY=false on a
-    public demo if you do not want visitors to share the operator quota.
-    """
-    flag = (os.getenv("FIRMS_ALLOW_HOST_KEY") or "").strip().lower()
-    if flag in {"0", "false", "no", "off"}:
-        return False
-    if flag in {"1", "true", "yes", "on"}:
-        return True
-    # Default: allow — Cursor-bound secrets and local .env both work again.
-    return True
-
-
 def get_firms_map_key() -> str:
     """
-    Resolve MAP_KEY for NRT calls.
+    MAP_KEY for live NRT — only from host env (Cursor secret / .env).
 
-    Prefer a session-entered key, then host env (Cursor secret / .env).
-    Value is never logged.
+    No UI paste field; value is never logged.
     """
-    session_key = (st.session_state.get("visitor_map_key") or "").strip()
-    if session_key:
-        return session_key
-    if not _allow_host_map_key():
-        return ""
     return (os.getenv("FIRMS_MAP_KEY") or "").strip()
 
 
@@ -187,37 +165,12 @@ def _record_nrt_fetch() -> None:
     st.session_state.nrt_fetch_times = stamps[-NRT_MAX_FETCHES_PER_SESSION :]
 
 
-def render_map_key_input(*, expanded: bool = False) -> str:
-    """
-    Optional visitor MAP_KEY (session-only); never echoed back to logs.
-
-    Returns the resolved key for this run. Do not pass value="" into the
-    password widget — that wiped the key on every Streamlit rerun.
-    """
-    with st.expander("FIRMS MAP_KEY (optional, session only)", expanded=expanded):
-        st.caption(
-            "Paste your NASA FIRMS MAP_KEY here for live NRT. "
-            "It stays in this browser session only (not written to disk)."
-        )
-        st.text_input(
-            "MAP_KEY",
-            type="password",
-            key="visitor_map_key_input",
-            autocomplete="off",
-            help="Get a key at https://firms.modaps.eosdis.nasa.gov/api/map_key",
-        )
-        key = (st.session_state.get("visitor_map_key_input") or "").strip()
-        st.session_state.visitor_map_key = key
-        if key:
-            st.success("MAP_KEY loaded for this session.")
-    return (st.session_state.get("visitor_map_key") or "").strip()
-
-
 def guard_nrt_fetch(map_key: str) -> bool:
     """Return True if an NRT fetch may proceed; otherwise show a warning."""
     if not map_key:
         st.warning(
-            "Live FIRMS needs a MAP_KEY — enter yours above, or set FIRMS_MAP_KEY locally."
+            "Live FIRMS needs FIRMS_MAP_KEY in the app environment "
+            "(Cursor Secrets / .env)."
         )
         return False
     ok, reason = _nrt_rate_limit_ok()
@@ -2165,7 +2118,6 @@ def main() -> None:
         st.session_state.comparison = None
         st.session_state.comparison_meta = None
         st.session_state.nrt_fetch_times = []
-        st.session_state.visitor_map_key = ""
 
     # Prefer session uploads when present; otherwise shared operator archive
     upload_dir = session_upload_dir()
@@ -2174,8 +2126,6 @@ def main() -> None:
     archive_root = upload_dir if session_inventory else DATA_PATH
     inventory = session_inventory or shared_inventory
 
-    # Render MAP_KEY first so the widget value is available this run
-    render_map_key_input(expanded=not inventory)
     map_key = get_firms_map_key()
     has_archive = bool(inventory)
     has_nrt = bool(map_key)
@@ -2183,7 +2133,8 @@ def main() -> None:
 
     if not has_archive and not has_nrt:
         st.warning(
-            "No fire archive found. Put CSVs in `data/` or enter a FIRMS MAP_KEY."
+            "No fire archive found. Put CSVs in `data/` "
+            "(live NRT also needs FIRMS_MAP_KEY in the environment)."
         )
         st.info(
             "Large archives (multi-GB) are **not stored in git** and do not survive "
