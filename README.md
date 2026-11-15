@@ -21,9 +21,9 @@ Matched (High Confidence) = within **1 km** and **±6 hours**.
 | **Final Project** | Source + live app (see below) |
 | **NASA Data** | [NASA FIRMS](https://firms.modaps.eosdis.nasa.gov/) (MODIS + VIIRS Archive / NRT) |
 
-**Live Streamlit (works):** Cloudflare tunnel from this agent — ask the agent for the current `*.trycloudflare.com` URL (WebSockets OK).
+**Live site (Cursor Apps):** FastAPI HTML UI at the published `*.apps.grok.bot` slug (no WebSockets). Sample FIRMS CSV loads by default; live NRT needs `FIRMS_MAP_KEY`.
 
-**Cursor Apps URL** `https://fire-calendar.apps.grok.bot` serves Streamlit HTML but the host does **not** upgrade WebSockets (`/_stcore/stream` → HTTP 200 HTML), so the UI stays on a grey skeleton. Use the tunnel (or Streamlit Community Cloud) for a clickable demo until that is fixed.
+Optional full Streamlit archive explorer: `streamlit run streamlit_app.py` (needs WebSocket-capable host).
 
 Open each link in a private window before submit.
 
