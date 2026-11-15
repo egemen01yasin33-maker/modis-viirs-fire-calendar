@@ -11,6 +11,18 @@ Dark Streamlit UI. Primary path:
 
 Matched (High Confidence) = within **1 km** and **±6 hours**.
 
+## NASA Space Apps submission links
+
+`.github.io` is **not required**. Judges need any **public HTTPS** links:
+
+| Submission field | What to paste |
+| --- | --- |
+| **Project Demo** | 7-slide pitch (English): https://egemen01yasin33-maker.github.io/modis-viirs-fire-calendar/ |
+| **Final Project** | Source repo: https://github.com/egemen01yasin33-maker/modis-viirs-fire-calendar |
+| **NASA Data** | [NASA FIRMS](https://firms.modaps.eosdis.nasa.gov/) (MODIS + VIIRS Archive / NRT) |
+
+Open each link in a private window before submit. Live Streamlit hosting is optional for judging; the demo deck + public GitHub satisfy the form.
+
 ## Features
 
 - Preset regions (Global, Amazon, Australia, California, Mediterranean,
