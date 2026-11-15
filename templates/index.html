@@ -478,10 +478,10 @@
           scrollWheelZoom: true,
           preferCanvas: true,
         });
-        // Dark basemap so teal/cyan hotspot points stay readable
-        L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
-          maxZoom: 18,
-          attribution: "&copy; OpenStreetMap &copy; CARTO",
+        // OpenStreetMap — free, no API key (Carto basemaps require a key).
+        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+          maxZoom: 19,
+          attribution: "&copy; OpenStreetMap contributors",
         }).addTo(map);
 
         const canvasRenderer = L.canvas({ padding: 0.5 });
