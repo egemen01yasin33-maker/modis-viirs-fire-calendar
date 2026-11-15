@@ -53,6 +53,43 @@ def list_archive_regions(root: Path) -> list[str]:
     ]
 
 
+def pick_bundled_region_for_bbox(
+    root: Path,
+    min_lon: float,
+    min_lat: float,
+    max_lon: float,
+    max_lat: float,
+) -> str:
+    """
+    Choose the smallest shipped extract that covers the custom bbox center,
+    falling back to Mediterranean / Turkey when possible.
+    """
+    from src.firms_api import PRESET_REGIONS
+
+    available = set(list_archive_regions(root))
+    cx = (min_lon + max_lon) / 2.0
+    cy = (min_lat + max_lat) / 2.0
+
+    # Prefer smallest containing preset among bundled files
+    candidates: list[tuple[float, str]] = []
+    for name, fname in BUNDLED_REGION_FILES.items():
+        if name not in available or name not in PRESET_REGIONS:
+            continue
+        a, b, c, d = PRESET_REGIONS[name]
+        if a <= cx <= c and b <= cy <= d:
+            area = (c - a) * (d - b)
+            candidates.append((area, name))
+    if candidates:
+        candidates.sort()
+        return candidates[0][1]
+    for fallback in ("Mediterranean", "Turkey", "California"):
+        if fallback in available:
+            return fallback
+    if available:
+        return sorted(available)[0]
+    raise ArchiveCsvError("No bundled archive extracts are available on this host.")
+
+
 def archive_date_bounds(root: Path) -> tuple[date, date]:
     if has_full_archive_db(root):
         try:
@@ -80,6 +117,97 @@ def _parse_bounds(start: date | str, end: date | str) -> tuple[str, str]:
     return start_s, end_s
 
 
+def _bundled_parquet_paths(root: Path, region: str | None = None) -> list[Path]:
+    """Parquet files to query: one preset extract, or all bundled for custom bbox."""
+    base = bundled_dir(root)
+    if region and region in BUNDLED_REGION_FILES:
+        path = base / BUNDLED_REGION_FILES[region]
+        if path.is_file():
+            return [path]
+    paths = sorted(
+        base / fname
+        for fname in BUNDLED_REGION_FILES.values()
+        if (base / fname).is_file()
+    )
+    if not paths:
+        raise ArchiveCsvError(
+            "No bundled archive extracts found under data/bundled/. "
+            "Re-deploy with the 2023–2026 regional Parquet files."
+        )
+    return paths
+
+
+def _query_parquet_window(
+    paths: list[Path],
+    *,
+    min_lon: float,
+    min_lat: float,
+    max_lon: float,
+    max_lat: float,
+    start_s: str,
+    end_s: str,
+    max_rows: int,
+) -> tuple[pd.DataFrame, pd.DataFrame, int]:
+    import duckdb
+
+    src = paths[0].as_posix() if len(paths) == 1 else [p.as_posix() for p in paths]
+    con = duckdb.connect()
+    try:
+        daily = con.execute(
+            """
+            SELECT
+              CAST(acq_date AS DATE) AS period,
+              count(*)::BIGINT AS total,
+              coalesce(sum(TRY_CAST(frp AS DOUBLE)), 0)::DOUBLE AS frp_sum,
+              sum(
+                CASE
+                  WHEN lower(coalesce(instrument, '')) LIKE '%modis%'
+                    OR lower(coalesce(satellite, '')) IN ('terra', 'aqua')
+                  THEN 1 ELSE 0
+                END
+              )::BIGINT AS modis_n,
+              sum(
+                CASE
+                  WHEN lower(coalesce(instrument, '')) LIKE '%modis%'
+                    OR lower(coalesce(satellite, '')) IN ('terra', 'aqua')
+                  THEN 0 ELSE 1
+                END
+              )::BIGINT AS viirs_n
+            FROM read_parquet(?, union_by_name=true)
+            WHERE CAST(acq_date AS DATE) BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
+              AND CAST(longitude AS DOUBLE) BETWEEN ? AND ?
+              AND CAST(latitude AS DOUBLE) BETWEEN ? AND ?
+            GROUP BY 1
+            ORDER BY 1
+            """,
+            [src, start_s, end_s, min_lon, max_lon, min_lat, max_lat],
+        ).df()
+        total_count = int(daily["total"].sum()) if not daily.empty else 0
+        raw = con.execute(
+            """
+            SELECT
+              CAST(latitude AS DOUBLE) AS latitude,
+              CAST(longitude AS DOUBLE) AS longitude,
+              CAST(acq_date AS VARCHAR) AS acq_date,
+              CAST(acq_time AS VARCHAR) AS acq_time,
+              CAST(satellite AS VARCHAR) AS satellite,
+              CAST(instrument AS VARCHAR) AS instrument,
+              CAST(confidence AS VARCHAR) AS confidence,
+              TRY_CAST(frp AS DOUBLE) AS frp
+            FROM read_parquet(?, union_by_name=true)
+            WHERE CAST(acq_date AS DATE) BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
+              AND CAST(longitude AS DOUBLE) BETWEEN ? AND ?
+              AND CAST(latitude AS DOUBLE) BETWEEN ? AND ?
+            ORDER BY frp DESC NULLS LAST
+            LIMIT ?
+            """,
+            [src, start_s, end_s, min_lon, max_lon, min_lat, max_lat, int(max_rows)],
+        ).df()
+    finally:
+        con.close()
+    return raw, daily, total_count
+
+
 def load_archive_window(
     root: Path,
     *,
@@ -96,8 +224,13 @@ def load_archive_window(
     Return map sample + daily activity for one region/date window.
 
     Prefers the full DuckDB cache when present; otherwise uses bundled Parquet.
+    Custom coordinate boxes query all bundled extracts (or the full DB).
     """
     start_s, end_s = _parse_bounds(start, end)
+    if not (min_lon < max_lon and min_lat < max_lat):
+        raise ArchiveCsvError(
+            "Invalid coordinates: require west < east and south < north."
+        )
 
     if has_full_archive_db(root):
         from src.archive_csv import load_daily_activity, load_filtered_csvs
@@ -132,92 +265,22 @@ def load_archive_window(
             "map_stats": map_stats,
         }
 
-    fname = BUNDLED_REGION_FILES.get(region)
-    if not fname:
-        raise ArchiveCsvError(
-            f"Archive extract for “{region}” is not bundled on this host. "
-            "Pick Turkey, Aegean, Central Anatolia, Marmara, California, or Mediterranean."
-        )
-    path = bundled_dir(root) / fname
-    if not path.is_file():
-        raise ArchiveCsvError(
-            f"Missing bundled archive file `{fname}`. Re-deploy with data/bundled/."
-        )
-
     try:
-        import duckdb
-
-        con = duckdb.connect()
-        try:
-            daily = con.execute(
-                """
-                SELECT
-                  CAST(acq_date AS DATE) AS period,
-                  count(*)::BIGINT AS total,
-                  coalesce(sum(TRY_CAST(frp AS DOUBLE)), 0)::DOUBLE AS frp_sum,
-                  sum(
-                    CASE
-                      WHEN lower(coalesce(instrument, '')) LIKE '%modis%'
-                        OR lower(coalesce(satellite, '')) IN ('terra', 'aqua')
-                      THEN 1 ELSE 0
-                    END
-                  )::BIGINT AS modis_n,
-                  sum(
-                    CASE
-                      WHEN lower(coalesce(instrument, '')) LIKE '%modis%'
-                        OR lower(coalesce(satellite, '')) IN ('terra', 'aqua')
-                      THEN 0 ELSE 1
-                    END
-                  )::BIGINT AS viirs_n
-                FROM read_parquet(?)
-                WHERE CAST(acq_date AS DATE) BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
-                  AND CAST(longitude AS DOUBLE) BETWEEN ? AND ?
-                  AND CAST(latitude AS DOUBLE) BETWEEN ? AND ?
-                GROUP BY 1
-                ORDER BY 1
-                """,
-                [
-                    path.as_posix(),
-                    start_s,
-                    end_s,
-                    min_lon,
-                    max_lon,
-                    min_lat,
-                    max_lat,
-                ],
-            ).df()
-            total_count = int(daily["total"].sum()) if not daily.empty else 0
-            raw = con.execute(
-                """
-                SELECT
-                  CAST(latitude AS DOUBLE) AS latitude,
-                  CAST(longitude AS DOUBLE) AS longitude,
-                  CAST(acq_date AS VARCHAR) AS acq_date,
-                  CAST(acq_time AS VARCHAR) AS acq_time,
-                  CAST(satellite AS VARCHAR) AS satellite,
-                  CAST(instrument AS VARCHAR) AS instrument,
-                  CAST(confidence AS VARCHAR) AS confidence,
-                  TRY_CAST(frp AS DOUBLE) AS frp
-                FROM read_parquet(?)
-                WHERE CAST(acq_date AS DATE) BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
-                  AND CAST(longitude AS DOUBLE) BETWEEN ? AND ?
-                  AND CAST(latitude AS DOUBLE) BETWEEN ? AND ?
-                ORDER BY frp DESC NULLS LAST
-                LIMIT ?
-                """,
-                [
-                    path.as_posix(),
-                    start_s,
-                    end_s,
-                    min_lon,
-                    max_lon,
-                    min_lat,
-                    max_lat,
-                    int(max_rows),
-                ],
-            ).df()
-        finally:
-            con.close()
+        paths = _bundled_parquet_paths(
+            root, None if region in {"Custom", "custom", ""} else region
+        )
+        raw, daily, total_count = _query_parquet_window(
+            paths,
+            min_lon=min_lon,
+            min_lat=min_lat,
+            max_lon=max_lon,
+            max_lat=max_lat,
+            start_s=start_s,
+            end_s=end_s,
+            max_rows=max_rows,
+        )
+    except ArchiveCsvError:
+        raise
     except Exception as exc:  # noqa: BLE001
         raise ArchiveCsvError(f"Could not read bundled archive: {exc}") from exc
 
@@ -232,7 +295,7 @@ def load_archive_window(
         "raw": raw,
         "daily": daily,
         "total_count": total_count,
-        "files": [fname],
+        "files": [p.name for p in paths],
         "source": "bundled",
         "map_stats": {},
     }

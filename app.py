@@ -38,6 +38,7 @@ from src.bundled_archive import (
     daily_to_series_json,
     list_archive_regions,
     load_archive_window,
+    pick_bundled_region_for_bbox,
 )
 from src.firms_api import (
     AVAILABLE_SENSORS,
@@ -62,7 +63,7 @@ load_dotenv(ROOT / ".env")
 
 TEMPLATES = Jinja2Templates(directory=str(ROOT / "templates"))
 SAMPLE_CSV = ROOT / "data" / "sample_firms.csv"
-_MAP_POINT_CAP = 400
+_MAP_POINT_CAP = 3000
 
 _CSRF_COOKIE = "fc_csrf"
 
@@ -327,24 +328,62 @@ def _run_pipeline(raw: pd.DataFrame, *, daily: pd.DataFrame | None = None) -> di
     }
 
 
-def _archive_result(
+def _parse_bbox(
+    *,
+    area_mode: str,
     region: str,
+    min_lon: str | float,
+    min_lat: str | float,
+    max_lon: str | float,
+    max_lat: str | float,
+) -> tuple[str, tuple[float, float, float, float]]:
+    """Return (label, bbox). Custom mode validates numeric west/south/east/north."""
+    if area_mode == "custom":
+        try:
+            west = float(min_lon)
+            south = float(min_lat)
+            east = float(max_lon)
+            north = float(max_lat)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Coordinates must be numbers (lon/lat).") from exc
+        if not (-180.0 <= west < east <= 180.0 and -90.0 <= south < north <= 90.0):
+            raise ValueError(
+                "Invalid bbox: need west < east and south < north within world bounds."
+            )
+        if (east - west) > 80 or (north - south) > 60:
+            raise ValueError("Custom area is too large — shrink the box (max ~80°×60°).")
+        return "Custom coordinates", (west, south, east, north)
+
+    regions = list_archive_regions(ROOT)
+    if region not in PRESET_REGIONS:
+        region = "Turkey" if "Turkey" in PRESET_REGIONS else next(iter(PRESET_REGIONS))
+    if region not in regions and regions:
+        # Hosted bundle may omit Global etc. — fall back to Turkey
+        region = "Turkey" if "Turkey" in regions else regions[0]
+    return region, PRESET_REGIONS[region]
+
+
+def _archive_result(
+    region_label: str,
     start: date,
     end: date,
+    bbox: tuple[float, float, float, float],
 ) -> dict:
-    regions = list_archive_regions(ROOT)
-    if region not in regions:
-        region = "Turkey" if "Turkey" in regions else (regions[0] if regions else region)
-    if region not in PRESET_REGIONS:
-        raise ArchiveCsvError(f"Unknown region: {region}")
-    bbox = PRESET_REGIONS[region]
+    min_lon, min_lat, max_lon, max_lat = bbox
+    # Bundled extracts are keyed by preset name; custom boxes pick a covering file
+    if region_label in PRESET_REGIONS and region_label != "Custom coordinates":
+        bundle_key = region_label
+    else:
+        bundle_key = pick_bundled_region_for_bbox(
+            ROOT, min_lon, min_lat, max_lon, max_lat
+        )
     payload = load_archive_window(
         ROOT,
-        region=region,
-        min_lon=bbox[0],
-        min_lat=bbox[1],
-        max_lon=bbox[2],
-        max_lat=bbox[3],
+        region=bundle_key,
+        min_lon=min_lon,
+        min_lat=min_lat,
+        max_lon=max_lon,
+        max_lat=max_lat,
         start=start,
         end=end,
     )
@@ -355,8 +394,14 @@ def _archive_result(
         "total": total,
     }
     result["rows"] = total
+    result["bbox"] = [min_lon, min_lat, max_lon, max_lat]
+    result["map_bounds"] = [[min_lat, min_lon], [max_lat, max_lon]]
+    # Prefer bbox center for empty samples so the map stays on the selected area
+    if result["rows"] == 0 or payload["raw"].empty:
+        result["map_center"] = [(min_lat + max_lat) / 2.0, (min_lon + max_lon) / 2.0]
+        result["map_zoom"] = 6
     result["source_label"] = (
-        f"Archive · {region} · {start.isoformat()} → {end.isoformat()} "
+        f"Archive · {region_label} · {start.isoformat()} → {end.isoformat()} "
         f"({payload.get('source', 'archive')})"
     )
     result["period_label"] = f"{start.isoformat()} → {end.isoformat()}"
@@ -387,9 +432,15 @@ def _default_form() -> dict:
     c_end = date(start.year - 1, min(end.month, 12), min(end.day, 28))
     c_start = date(start.year - 1, start.month, min(start.day, 28))
     c_start, c_end = _clamp_archive_dates(c_start, c_end)
+    turkey = PRESET_REGIONS.get("Turkey", (25.5, 35.8, 45.0, 42.3))
     return {
         "mode": "archive",
+        "area_mode": "preset",
         "region": "Turkey",
+        "min_lon": f"{turkey[0]:.2f}",
+        "min_lat": f"{turkey[1]:.2f}",
+        "max_lon": f"{turkey[2]:.2f}",
+        "max_lat": f"{turkey[3]:.2f}",
         "days": 5,
         "start_date": start.isoformat(),
         "end_date": end.isoformat(),
@@ -417,6 +468,7 @@ def _page_context(
         "presets": archive_regions if form.get("mode") == "archive" else list(PRESET_REGIONS.keys()),
         "archive_regions": archive_regions,
         "all_presets": list(PRESET_REGIONS.keys()),
+        "preset_bboxes": {k: list(v) for k, v in PRESET_REGIONS.items()},
         "form": form,
         "error": error,
         "result": result,
@@ -445,43 +497,78 @@ def _html_response(
     return resp
 
 
-@app.get("/", response_class=HTMLResponse)
-async def home(request: Request) -> Response:
+def _run_with_form(form: dict) -> tuple[dict | None, str | None, dict]:
+    """Execute the selected mode; returns (result, error, form)."""
     error = None
     result = None
-    compare = None
-    csrf = request.cookies.get(_CSRF_COOKIE) or _issue_csrf()
-    form = _default_form()
     try:
+        label, bbox = _parse_bbox(
+            area_mode=form.get("area_mode") or "preset",
+            region=form.get("region") or "Turkey",
+            min_lon=form.get("min_lon") or 25.5,
+            min_lat=form.get("min_lat") or 35.8,
+            max_lon=form.get("max_lon") or 45.0,
+            max_lat=form.get("max_lat") or 42.3,
+        )
+        form["min_lon"] = f"{bbox[0]:.4f}".rstrip("0").rstrip(".")
+        form["min_lat"] = f"{bbox[1]:.4f}".rstrip("0").rstrip(".")
+        form["max_lon"] = f"{bbox[2]:.4f}".rstrip("0").rstrip(".")
+        form["max_lat"] = f"{bbox[3]:.4f}".rstrip("0").rstrip(".")
+        if form["area_mode"] != "custom":
+            form["region"] = label
+
+        if form["mode"] == "nrt":
+            if not _nrt_configured():
+                raise FirmsApiError(
+                    "Live FIRMS is not enabled on this host "
+                    "(needs FIRMS_MAP_KEY and NRT_GATE_PASSWORD)."
+                )
+            # access_code checked by caller for POST; GET never hits live NRT
+            raise FirmsApiError("Use Run with an access code for live FIRMS.")
+        if form["mode"] == "sample":
+            result = cached_sample_result()
+            return result, None, form
+
         start = _parse_date(form["start_date"], ARCHIVE_DATE_MIN)
         end = _parse_date(form["end_date"], ARCHIVE_DATE_MAX)
         start, end = _clamp_archive_dates(start, end)
         form["start_date"] = start.isoformat()
         form["end_date"] = end.isoformat()
-        if list_archive_regions(ROOT):
-            result = _archive_result(form["region"], start, end)
-            if form.get("compare") == "1":
-                cs = _parse_date(form["compare_start"], start)
-                ce = _parse_date(form["compare_end"], end)
-                cs, ce = _clamp_archive_dates(cs, ce)
-                form["compare_start"] = cs.isoformat()
-                form["compare_end"] = ce.isoformat()
-                other = _archive_result(form["region"], cs, ce)
-                rows = _comparison_rows(result["harm"], other["harm"])
-                # Prefer exact window totals from daily aggregates for Total
-                rows = _overlay_exact_totals(rows, result["summary"], other["summary"])
-                result["compare"] = {
-                    "label": other["period_label"],
-                    "rows": rows,
-                    "source_label": other["source_label"],
-                    "summary": other["summary"],
-                }
-            result.pop("harm", None)
-        else:
+        if not list_archive_regions(ROOT):
             result = cached_sample_result()
             form["mode"] = "sample"
-    except Exception as exc:  # noqa: BLE001
+            return result, None, form
+
+        result = _archive_result(label, start, end, bbox)
+        if form.get("compare") == "1":
+            cs = _parse_date(form["compare_start"], start)
+            ce = _parse_date(form["compare_end"], end)
+            cs, ce = _clamp_archive_dates(cs, ce)
+            form["compare_start"] = cs.isoformat()
+            form["compare_end"] = ce.isoformat()
+            other = _archive_result(label, cs, ce, bbox)
+            rows = _comparison_rows(result["harm"], other["harm"])
+            rows = _overlay_exact_totals(rows, result["summary"], other["summary"])
+            result["compare"] = {
+                "label": other["period_label"],
+                "rows": rows,
+                "source_label": other["source_label"],
+                "summary": other["summary"],
+            }
+        result.pop("harm", None)
+    except (FirmsApiError, ArchiveCsvError, ValueError) as exc:
         error = str(exc)
+    except Exception as exc:  # noqa: BLE001
+        error = f"Unexpected error: {exc}"
+    return result, error, form
+
+
+@app.get("/", response_class=HTMLResponse)
+async def home(request: Request) -> Response:
+    csrf = request.cookies.get(_CSRF_COOKIE) or _issue_csrf()
+    form = _default_form()
+    result, error, form = _run_with_form(form)
+    if error and result is None:
         try:
             result = cached_sample_result()
         except Exception:  # noqa: BLE001
@@ -494,7 +581,12 @@ async def home(request: Request) -> Response:
 async def run(
     request: Request,
     mode: str = Form("archive"),
+    area_mode: str = Form("preset"),
     region: str = Form("Turkey"),
+    min_lon: str = Form("25.5"),
+    min_lat: str = Form("35.8"),
+    max_lon: str = Form("45.0"),
+    max_lat: str = Form("42.3"),
     days: int = Form(5),
     start_date: str = Form(""),
     end_date: str = Form(""),
@@ -504,16 +596,17 @@ async def run(
     csrf_token: str = Form(""),
     access_code: str = Form(""),
 ) -> Response:
-    error = None
-    result = None
     days = max(1, min(int(days), MAX_DAY_RANGE))
-    if region not in PRESET_REGIONS:
-        region = "Turkey"
     csrf = request.cookies.get(_CSRF_COOKIE) or _issue_csrf()
     form = {
         **_default_form(),
         "mode": mode if mode in {"archive", "sample", "nrt"} else "archive",
-        "region": region,
+        "area_mode": "custom" if area_mode == "custom" else "preset",
+        "region": region if region in PRESET_REGIONS else "Turkey",
+        "min_lon": min_lon,
+        "min_lat": min_lat,
+        "max_lon": max_lon,
+        "max_lat": max_lat,
         "days": days,
         "start_date": start_date,
         "end_date": end_date,
@@ -527,8 +620,10 @@ async def run(
         ctx = _page_context(request, result=None, error=error, form=form, csrf=csrf)
         return _html_response(request, ctx, csrf=csrf)
 
-    try:
-        if form["mode"] == "nrt":
+    if form["mode"] == "nrt":
+        error = None
+        result = None
+        try:
             if not _nrt_configured():
                 raise FirmsApiError(
                     "Live FIRMS is not enabled on this host "
@@ -540,52 +635,41 @@ async def run(
             ok, reason = _nrt_rate_ok(ip)
             if not ok:
                 raise FirmsApiError(reason)
-            key = _firms_key()
-            bbox = PRESET_REGIONS[region]
+            label, bbox = _parse_bbox(
+                area_mode=form["area_mode"],
+                region=form["region"],
+                min_lon=form["min_lon"],
+                min_lat=form["min_lat"],
+                max_lon=form["max_lon"],
+                max_lat=form["max_lat"],
+            )
+            form["min_lon"] = str(bbox[0])
+            form["min_lat"] = str(bbox[1])
+            form["max_lon"] = str(bbox[2])
+            form["max_lat"] = str(bbox[3])
             end = date.today()
             start = end - timedelta(days=days - 1)
             _record_nrt(ip)
             raw = fetch_firms_area(
-                key,
+                _firms_key(),
                 *bbox,
                 start,
                 end,
                 sensors=AVAILABLE_SENSORS,
             )
             result = _run_pipeline(raw)
+            result["bbox"] = list(bbox)
+            result["map_bounds"] = [[bbox[1], bbox[0]], [bbox[3], bbox[2]]]
             result["source_label"] = (
-                f"Live FIRMS NRT · {region} · {start.isoformat()} → {end.isoformat()}"
+                f"Live FIRMS NRT · {label} · {start.isoformat()} → {end.isoformat()}"
             )
             result.pop("harm", None)
-        elif form["mode"] == "sample":
-            result = cached_sample_result()
-        else:
-            start = _parse_date(form["start_date"], ARCHIVE_DATE_MIN)
-            end = _parse_date(form["end_date"], ARCHIVE_DATE_MAX)
-            start, end = _clamp_archive_dates(start, end)
-            form["start_date"] = start.isoformat()
-            form["end_date"] = end.isoformat()
-            result = _archive_result(region, start, end)
-            if form["compare"] == "1":
-                cs = _parse_date(form["compare_start"], start)
-                ce = _parse_date(form["compare_end"], end)
-                cs, ce = _clamp_archive_dates(cs, ce)
-                form["compare_start"] = cs.isoformat()
-                form["compare_end"] = ce.isoformat()
-                other = _archive_result(region, cs, ce)
-                rows = _comparison_rows(result["harm"], other["harm"])
-                rows = _overlay_exact_totals(rows, result["summary"], other["summary"])
-                result["compare"] = {
-                    "label": other["period_label"],
-                    "rows": rows,
-                    "source_label": other["source_label"],
-                    "summary": other["summary"],
-                }
-            result.pop("harm", None)
-    except (FirmsApiError, ArchiveCsvError, ValueError) as exc:
-        error = str(exc)
-    except Exception as exc:  # noqa: BLE001
-        error = f"Unexpected error: {exc}"
+        except (FirmsApiError, ValueError) as exc:
+            error = str(exc)
+        except Exception as exc:  # noqa: BLE001
+            error = f"Unexpected error: {exc}"
+    else:
+        result, error, form = _run_with_form(form)
 
     csrf = _issue_csrf()
     ctx = _page_context(

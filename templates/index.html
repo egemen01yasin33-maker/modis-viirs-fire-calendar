@@ -33,7 +33,7 @@
       color: var(--teal);
       margin: 0 0 0.3rem;
     }
-    .lead { color: var(--muted); max-width: 42rem; margin: 0 0 1rem; line-height: 1.45; font-size: 0.95rem; }
+    .lead { color: var(--muted); max-width: 44rem; margin: 0 0 1rem; line-height: 1.45; font-size: 0.95rem; }
     .panel {
       background: var(--panel);
       border: 1px solid var(--line);
@@ -42,15 +42,16 @@
     }
     .row { display: flex; flex-wrap: wrap; gap: 0.65rem 0.85rem; align-items: end; }
     label { display: grid; gap: 0.25rem; font-size: 0.78rem; color: var(--muted); }
-    select, input[type="number"], input[type="password"], input[type="date"] {
+    select, input[type="number"], input[type="password"], input[type="date"], input[type="text"] {
       background: #0a1016;
       border: 1px solid var(--line);
       color: var(--ink);
       padding: 0.45rem 0.55rem;
-      min-width: 9rem;
+      min-width: 8.5rem;
       font: inherit;
       color-scheme: dark;
     }
+    input.coord { min-width: 6.5rem; max-width: 8rem; }
     .check {
       display: flex;
       align-items: center;
@@ -67,6 +68,24 @@
       font-weight: 700;
       padding: 0.5rem 0.9rem;
       cursor: pointer;
+    }
+    .chip {
+      background: #0a1016;
+      border: 1px solid var(--line);
+      color: var(--ink);
+      font: inherit;
+      font-size: 0.78rem;
+      padding: 0.35rem 0.55rem;
+      cursor: pointer;
+    }
+    .chip:hover, .chip.active { border-color: var(--teal); color: var(--teal); }
+    .chips { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0.55rem 0 0.15rem; }
+    .section-label {
+      font-size: 0.72rem;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin: 0.85rem 0 0.35rem;
     }
     .hint { color: var(--muted); font-size: 0.8rem; margin: 0.5rem 0 0; }
     .stats {
@@ -93,7 +112,7 @@
     }
     .source { color: var(--cyan); font-size: 0.85rem; margin: 0.25rem 0 0.75rem; }
     h2 { font-size: 1rem; margin: 1rem 0 0.45rem; }
-    #map { height: 380px; width: 100%; background: #0a1016; border: 1px solid var(--line); }
+    #map { height: 420px; width: 100%; background: #0a1016; border: 1px solid var(--line); }
     #chart-wrap { height: 260px; position: relative; }
     .legend { display: flex; flex-wrap: wrap; gap: 0.7rem; margin: 0.35rem 0 0.6rem; font-size: 0.8rem; color: var(--muted); }
     .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; margin-right: 0.3rem; }
@@ -112,23 +131,27 @@
     }
     .compare-card .delta { font-size: 0.78rem; color: var(--cyan); margin-top: 0.25rem; }
     .compare-card .vs { font-size: 0.72rem; color: var(--muted); }
-    .archive-only, .nrt-only { display: none; }
-    body[data-mode="archive"] .archive-only { display: grid; }
+    .nrt-only { display: none; }
     body[data-mode="nrt"] .nrt-only { display: grid; }
-    body[data-mode="archive"] .archive-block { display: block; }
-    .archive-block { display: none; }
+    body[data-mode="nrt"] .archive-block { display: none; }
+    body[data-mode="sample"] .archive-block { display: none; }
+    .coords-row { display: none; }
+    body[data-area="custom"] .coords-row { display: flex; }
+    body[data-area="preset"] .region-row { display: grid; }
+    body[data-area="custom"] .region-row { display: none; }
   </style>
 </head>
-<body data-mode="{{ form.mode }}">
+<body data-mode="{{ form.mode }}" data-area="{{ form.area_mode }}">
   <div class="wrap">
     <h1 class="brand">Unified Fire Activity Calendar</h1>
     <p class="lead">
-      Harmonize MODIS and VIIRS hotspots (1&nbsp;km · ±6&nbsp;h). Pick any window in the
-      <strong>2023 → 2026</strong> archive, or compare two periods side by side.
+      Harmonize MODIS and VIIRS hotspots (1&nbsp;km · ±6&nbsp;h). Choose a year or date window
+      in <strong>2023 → 2026</strong>, set a region or custom coordinates, then compare periods.
     </p>
 
     <form class="panel" method="post" action="/run" id="run-form">
       <input type="hidden" name="csrf_token" value="{{ csrf }}" />
+
       <div class="row">
         <label>Mode
           <select name="mode" id="mode">
@@ -141,24 +164,21 @@
             </option>
           </select>
         </label>
-        <label>Region
+
+        <label>Area
+          <select name="area_mode" id="area_mode">
+            <option value="preset" {% if form.area_mode != 'custom' %}selected{% endif %}>Preset region</option>
+            <option value="custom" {% if form.area_mode == 'custom' %}selected{% endif %}>Custom coordinates</option>
+          </select>
+        </label>
+
+        <label class="region-row">Region
           <select name="region" id="region">
             {% set region_list = archive_regions if form.mode == 'archive' else all_presets %}
             {% for name in region_list %}
             <option value="{{ name }}" {% if name == form.region %}selected{% endif %}>{{ name }}</option>
             {% endfor %}
           </select>
-        </label>
-
-        <label class="archive-only">Start date
-          <input type="date" name="start_date" id="start_date"
-                 min="{{ form.archive_min }}" max="{{ form.archive_max }}"
-                 value="{{ form.start_date }}" />
-        </label>
-        <label class="archive-only">End date
-          <input type="date" name="end_date" id="end_date"
-                 min="{{ form.archive_min }}" max="{{ form.archive_max }}"
-                 value="{{ form.end_date }}" />
         </label>
 
         <label class="nrt-only">NRT days
@@ -171,7 +191,45 @@
         <button class="btn" type="submit">Run</button>
       </div>
 
-      <div class="archive-block" style="margin-top:0.75rem">
+      <div class="row coords-row" style="margin-top:0.65rem">
+        <label>West (lon)
+          <input class="coord" type="text" name="min_lon" id="min_lon" value="{{ form.min_lon }}" inputmode="decimal" />
+        </label>
+        <label>South (lat)
+          <input class="coord" type="text" name="min_lat" id="min_lat" value="{{ form.min_lat }}" inputmode="decimal" />
+        </label>
+        <label>East (lon)
+          <input class="coord" type="text" name="max_lon" id="max_lon" value="{{ form.max_lon }}" inputmode="decimal" />
+        </label>
+        <label>North (lat)
+          <input class="coord" type="text" name="max_lat" id="max_lat" value="{{ form.max_lat }}" inputmode="decimal" />
+        </label>
+      </div>
+
+      <div class="archive-block">
+        <p class="section-label">Primary dates</p>
+        <div class="chips" id="year-chips" aria-label="Quick year select">
+          <button type="button" class="chip" data-year="2023">2023</button>
+          <button type="button" class="chip" data-year="2024">2024</button>
+          <button type="button" class="chip" data-year="2025">2025</button>
+          <button type="button" class="chip" data-year="2026">2026 YTD</button>
+          <button type="button" class="chip" data-range="summer">Summer (Jun–Aug)</button>
+          <button type="button" class="chip" data-range="full">Full archive</button>
+        </div>
+        <div class="row" style="margin-top:0.55rem">
+          <label>Start date
+            <input type="date" name="start_date" id="start_date"
+                   min="{{ form.archive_min }}" max="{{ form.archive_max }}"
+                   value="{{ form.start_date }}" required />
+          </label>
+          <label>End date
+            <input type="date" name="end_date" id="end_date"
+                   min="{{ form.archive_min }}" max="{{ form.archive_max }}"
+                   value="{{ form.end_date }}" required />
+          </label>
+        </div>
+
+        <p class="section-label">Compare period</p>
         <div class="row">
           <label class="check">
             <input type="checkbox" name="compare" value="1" id="compare"
@@ -190,14 +248,10 @@
           </label>
         </div>
         <p class="hint">
-          Archive covers <strong>{{ form.archive_min }} → {{ form.archive_max }}</strong>.
-          Choose a primary window, optionally a second window to compare totals / matched / MODIS / VIIRS.
+          Archive span <strong>{{ form.archive_min }} → {{ form.archive_max }}</strong>.
+          Year chips fill dates and run automatically. Custom coordinates use west/south/east/north.
         </p>
       </div>
-
-      <p class="hint nrt-hint" id="mode-hint">
-        Archive mode uses the local 2023–2026 FIRMS extracts. Live NRT needs the operator access code.
-      </p>
     </form>
 
     {% if error %}
@@ -232,6 +286,7 @@
       <span><i class="dot" style="background:#00e5d4"></i>Matched</span>
       <span><i class="dot" style="background:#14919b"></i>MODIS-only</span>
       <span><i class="dot" style="background:#7df9ff"></i>VIIRS-only</span>
+      <span><i class="dot" style="background:#f0c674;border-radius:0;width:12px;height:2px;vertical-align:middle"></i>Selected area</span>
     </div>
 
     <h2>Activity</h2>
@@ -242,7 +297,12 @@
 
     <script type="application/json" id="points-data">{{ result.points_json | safe }}</script>
     <script type="application/json" id="series-data">{{ result.series_json | safe }}</script>
-    <script type="application/json" id="map-meta">{{ {"center": result.map_center, "zoom": result.map_zoom} | tojson }}</script>
+    <script type="application/json" id="map-meta">{{ {
+      "center": result.map_center,
+      "zoom": result.map_zoom,
+      "bounds": result.map_bounds if result.map_bounds is defined else none,
+      "bbox": result.bbox if result.bbox is defined else none
+    } | tojson }}</script>
     {% endif %}
 
     <p class="foot">
@@ -255,33 +315,99 @@
   <script>
     (function () {
       const mode = document.getElementById("mode");
+      const areaMode = document.getElementById("area_mode");
       const body = document.body;
       const archiveOpts = {{ archive_regions | tojson }};
       const allOpts = {{ all_presets | tojson }};
+      const presetBboxes = {{ preset_bboxes | tojson }};
       const region = document.getElementById("region");
       const current = {{ form.region | tojson }};
+      const archMin = {{ form.archive_min | tojson }};
+      const archMax = {{ form.archive_max | tojson }};
+      const formEl = document.getElementById("run-form");
 
       function fillRegions(list) {
+        const prev = region.value || current;
         region.innerHTML = "";
         list.forEach((name) => {
           const opt = document.createElement("option");
           opt.value = name;
           opt.textContent = name;
-          if (name === current) opt.selected = true;
+          if (name === prev) opt.selected = true;
           region.appendChild(opt);
         });
         if (![...region.options].some((o) => o.selected) && region.options.length) {
           region.options[0].selected = true;
         }
+        syncCoordsFromRegion();
       }
 
       function syncMode() {
-        const m = mode.value;
-        body.dataset.mode = m;
-        fillRegions(m === "archive" ? archiveOpts : allOpts);
+        body.dataset.mode = mode.value;
+        fillRegions(mode.value === "archive" ? archiveOpts : allOpts);
       }
+
+      function syncArea() {
+        body.dataset.area = areaMode.value;
+        if (areaMode.value === "preset") syncCoordsFromRegion();
+      }
+
+      function syncCoordsFromRegion() {
+        const box = presetBboxes[region.value];
+        if (!box) return;
+        document.getElementById("min_lon").value = box[0];
+        document.getElementById("min_lat").value = box[1];
+        document.getElementById("max_lon").value = box[2];
+        document.getElementById("max_lat").value = box[3];
+      }
+
+      function clampIso(iso) {
+        if (iso < archMin) return archMin;
+        if (iso > archMax) return archMax;
+        return iso;
+      }
+
+      function setPrimary(start, end, autoRun) {
+        document.getElementById("start_date").value = clampIso(start);
+        document.getElementById("end_date").value = clampIso(end);
+        // Auto-fill compare = previous year same window when possible
+        const s = new Date(start + "T00:00:00Z");
+        const e = new Date(end + "T00:00:00Z");
+        const cs = new Date(s); cs.setUTCFullYear(cs.getUTCFullYear() - 1);
+        const ce = new Date(e); ce.setUTCFullYear(ce.getUTCFullYear() - 1);
+        const toIso = (d) => d.toISOString().slice(0, 10);
+        document.getElementById("compare_start").value = clampIso(toIso(cs));
+        document.getElementById("compare_end").value = clampIso(toIso(ce));
+        document.getElementById("compare").checked = true;
+        if (autoRun) formEl.requestSubmit();
+      }
+
+      document.getElementById("year-chips").addEventListener("click", (ev) => {
+        const btn = ev.target.closest(".chip");
+        if (!btn) return;
+        document.querySelectorAll("#year-chips .chip").forEach((c) => c.classList.remove("active"));
+        btn.classList.add("active");
+        if (btn.dataset.year) {
+          const y = btn.dataset.year;
+          if (y === "2026") setPrimary("2026-01-01", archMax, true);
+          else setPrimary(`${y}-01-01`, `${y}-12-31`, true);
+          return;
+        }
+        if (btn.dataset.range === "full") {
+          setPrimary(archMin, archMax, true);
+          return;
+        }
+        if (btn.dataset.range === "summer") {
+          const y = (document.getElementById("end_date").value || archMax).slice(0, 4);
+          setPrimary(`${y}-06-01`, `${y}-08-31`, true);
+        }
+      });
+
       mode.addEventListener("change", syncMode);
+      areaMode.addEventListener("change", syncArea);
+      region.addEventListener("change", syncCoordsFromRegion);
       syncMode();
+      syncArea();
     })();
   </script>
 
@@ -301,9 +427,9 @@
           data: {
             labels: series.labels,
             datasets: [
-              { label: "Matched", data: series.matched, borderColor: series.colors.matched, tension: 0.2, pointRadius: 2 },
-              { label: "MODIS-only", data: series.modis, borderColor: series.colors.modis, tension: 0.2, pointRadius: 2 },
-              { label: "VIIRS-only", data: series.viirs, borderColor: series.colors.viirs, tension: 0.2, pointRadius: 2 },
+              { label: "Matched", data: series.matched, borderColor: series.colors.matched, tension: 0.2, pointRadius: 1.5 },
+              { label: "MODIS-only", data: series.modis, borderColor: series.colors.modis, tension: 0.2, pointRadius: 1.5 },
+              { label: "VIIRS-only", data: series.viirs, borderColor: series.colors.viirs, tension: 0.2, pointRadius: 1.5 },
             ],
           },
           options: {
@@ -319,21 +445,44 @@
       }
 
       if (window.L) {
-        const map = L.map("map", { scrollWheelZoom: false }).setView(meta.center, meta.zoom);
+        const map = L.map("map", { scrollWheelZoom: false });
         L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
           maxZoom: 18,
           attribution: "&copy; OpenStreetMap",
         }).addTo(map);
+
+        const layer = L.layerGroup().addTo(map);
         for (const p of points) {
           L.circleMarker([p.lat, p.lon], {
-            radius: 5,
+            radius: 4,
             color: p.color,
             fillColor: p.color,
             fillOpacity: 0.85,
             weight: 1,
-          }).addTo(map).bindPopup(p.c);
+          }).addTo(layer).bindPopup(p.c);
         }
-        setTimeout(() => map.invalidateSize(), 50);
+
+        let fit = null;
+        if (meta.bounds && meta.bounds.length === 2) {
+          const rect = L.rectangle(meta.bounds, {
+            color: "#f0c674",
+            weight: 2,
+            fillOpacity: 0.04,
+            dashArray: "6 4",
+          }).addTo(map);
+          fit = rect.getBounds();
+        }
+        if (points.length) {
+          const pb = L.latLngBounds(points.map((p) => [p.lat, p.lon]));
+          fit = fit ? fit.extend(pb) : pb;
+        }
+        if (fit && fit.isValid()) {
+          map.fitBounds(fit.pad(0.08), { maxZoom: 10, animate: false });
+        } else {
+          map.setView(meta.center || [38, 35], meta.zoom || 5);
+        }
+        setTimeout(() => map.invalidateSize(), 80);
+        setTimeout(() => map.invalidateSize(), 400);
       }
     });
   </script>
