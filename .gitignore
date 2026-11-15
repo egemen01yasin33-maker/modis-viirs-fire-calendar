@@ -1,0 +1,22 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+.DS_Store
+.streamlit/secrets.toml
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# Keep sample + docs + restore manifest + shippable 2023–2026 extracts;
+# ignore large user-dropped archive CSVs / DuckDB cache
+data/*
+!data/.gitkeep
+!data/README.md
+!data/sample_firms.csv
+!data/archive_manifest.json
+!data/bundled/
+!data/bundled/**
+data/bundled/**/.*
+_publish_src/

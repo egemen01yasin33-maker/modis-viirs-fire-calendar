@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Unified Fire Activity Calendar</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+  <style>
+    :root {
+      --bg: #070b10;
+      --panel: #121a22;
+      --ink: #e8f1f4;
+      --muted: #8aa0ad;
+      --line: #24303a;
+      --teal: #00e5d4;
+      --cyan: #7df9ff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--ink);
+      font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+      background:
+        radial-gradient(900px 420px at 8% -8%, rgba(0, 229, 212, 0.1), transparent 55%),
+        var(--bg);
+    }
+    .wrap { max-width: 1040px; margin: 0 auto; padding: 1.1rem 1rem 2.5rem; }
+    .brand {
+      font-weight: 800;
+      font-size: clamp(1.6rem, 3.8vw, 2.4rem);
+      letter-spacing: -0.02em;
+      color: var(--teal);
+      margin: 0 0 0.3rem;
+    }
+    .lead { color: var(--muted); max-width: 44rem; margin: 0 0 1rem; line-height: 1.45; font-size: 0.95rem; }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      padding: 0.85rem 1rem;
+      margin-bottom: 0.85rem;
+    }
+    .row { display: flex; flex-wrap: wrap; gap: 0.65rem 0.85rem; align-items: end; }
+    label { display: grid; gap: 0.25rem; font-size: 0.78rem; color: var(--muted); }
+    select, input[type="number"], input[type="password"], input[type="date"], input[type="text"] {
+      background: #0a1016;
+      border: 1px solid var(--line);
+      color: var(--ink);
+      padding: 0.45rem 0.55rem;
+      min-width: 8.5rem;
+      font: inherit;
+      color-scheme: dark;
+    }
+    input.coord { min-width: 6.5rem; max-width: 8rem; }
+    .check {
+      display: flex;
+      align-items: center;
+      gap: 0.45rem;
+      font-size: 0.85rem;
+      color: var(--ink);
+      padding-bottom: 0.35rem;
+    }
+    .check input { width: 1rem; height: 1rem; }
+    .btn {
+      background: var(--teal);
+      color: #041016;
+      border: 0;
+      font-weight: 700;
+      padding: 0.5rem 0.9rem;
+      cursor: pointer;
+    }
+    .chip {
+      background: #0a1016;
+      border: 1px solid var(--line);
+      color: var(--ink);
+      font: inherit;
+      font-size: 0.78rem;
+      padding: 0.35rem 0.55rem;
+      cursor: pointer;
+    }
+    .chip:hover, .chip.active { border-color: var(--teal); color: var(--teal); }
+    .chips { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0.55rem 0 0.15rem; }
+    .section-label {
+      font-size: 0.72rem;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin: 0.85rem 0 0.35rem;
+    }
+    .hint { color: var(--muted); font-size: 0.8rem; margin: 0.5rem 0 0; }
+    .mode-badge {
+      display: inline-block;
+      border: 1px solid var(--teal);
+      color: var(--teal);
+      font-size: 0.78rem;
+      font-weight: 600;
+      padding: 0.45rem 0.65rem;
+      margin-bottom: 0.15rem;
+    }
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 0.5rem;
+      margin: 0.75rem 0;
+    }
+    @media (max-width: 900px) { .stats { grid-template-columns: repeat(3, 1fr); } }
+    @media (max-width: 640px) { .stats { grid-template-columns: repeat(2, 1fr); } }
+    .stat {
+      background: #0a1016;
+      border: 1px solid var(--line);
+      padding: 0.6rem 0.7rem;
+    }
+    .stat b { display: block; font-size: 1.25rem; color: var(--teal); }
+    .stat span { font-size: 0.72rem; color: var(--muted); }
+    .error {
+      border: 1px solid rgba(255, 107, 107, 0.45);
+      background: rgba(255, 107, 107, 0.08);
+      color: #ffb4b4;
+      padding: 0.65rem 0.85rem;
+      margin-bottom: 0.85rem;
+      font-size: 0.9rem;
+    }
+    .source { color: var(--cyan); font-size: 0.85rem; margin: 0.25rem 0 0.75rem; }
+    h2 { font-size: 1rem; margin: 1rem 0 0.45rem; }
+    #map { height: 460px; width: 100%; background: #0a1016; border: 1px solid var(--line); }
+    .map-caption { color: var(--muted); font-size: 0.8rem; margin: 0.35rem 0 0; }
+    #chart-wrap { height: 260px; position: relative; }
+    .legend { display: flex; flex-wrap: wrap; gap: 0.7rem; margin: 0.35rem 0 0.6rem; font-size: 0.8rem; color: var(--muted); }
+    .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; margin-right: 0.3rem; }
+    .foot { margin-top: 1.5rem; color: var(--muted); font-size: 0.75rem; }
+    a { color: var(--cyan); }
+    .compare-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 0.5rem;
+    }
+    @media (max-width: 640px) { .compare-grid { grid-template-columns: repeat(2, 1fr); } }
+    .compare-card {
+      background: #0a1016;
+      border: 1px solid var(--line);
+      padding: 0.65rem 0.7rem;
+    }
+    .compare-card .delta { font-size: 0.78rem; color: var(--cyan); margin-top: 0.25rem; }
+    .compare-card .vs { font-size: 0.72rem; color: var(--muted); }
+    .nrt-only { display: none; }
+    body[data-mode="nrt"] .nrt-only { display: grid; }
+    body[data-mode="nrt"] .archive-block { display: none; }
+    body[data-mode="sample"] .archive-block { display: none; }
+    .coords-row { display: none; }
+    body[data-area="custom"] .coords-row { display: flex; }
+    body[data-area="preset"] .region-row { display: grid; }
+    body[data-area="custom"] .region-row { display: none; }
+  </style>
+</head>
+<body data-mode="{{ form.mode }}" data-area="{{ form.area_mode }}">
+  <div class="wrap">
+    <h1 class="brand">Unified Fire Activity Calendar</h1>
+    <p class="lead">
+      Harmonize MODIS and VIIRS hotspots (1&nbsp;km · ±6&nbsp;h). Choose a year or date window
+      in <strong>2023 → 2026</strong>, set a region or custom coordinates, then compare periods.
+    </p>
+
+    <form class="panel" method="post" action="/run" id="run-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf }}" />
+
+      <div class="row">
+        <div>
+          <div style="font-size:0.78rem;color:var(--muted);margin-bottom:0.25rem">Mode (auto from dates)</div>
+          <div class="mode-badge" id="mode-badge">{{ form.mode_label }}</div>
+          <input type="hidden" name="mode" id="mode" value="{{ form.mode }}" />
+        </div>
+
+        <label>Area
+          <select name="area_mode" id="area_mode">
+            <option value="preset" {% if form.area_mode != 'custom' %}selected{% endif %}>Preset region</option>
+            <option value="custom" {% if form.area_mode == 'custom' %}selected{% endif %}>Custom coordinates</option>
+          </select>
+        </label>
+
+        <label class="region-row">Region
+          <select name="region" id="region">
+            {% for name in archive_regions %}
+            <option value="{{ name }}" {% if name == form.region %}selected{% endif %}>{{ name }}</option>
+            {% endfor %}
+          </select>
+        </label>
+
+        <label class="nrt-only">NRT days
+          <input type="number" name="days" min="1" max="{{ max_days }}" value="{{ form.days }}" />
+        </label>
+        <label class="nrt-only">Access code (live NRT)
+          <input type="password" name="access_code" autocomplete="off" placeholder="required for live" />
+        </label>
+
+        <button class="btn" type="submit">Run</button>
+      </div>
+
+      <div class="row coords-row" style="margin-top:0.65rem">
+        <label>West (lon)
+          <input class="coord" type="text" name="min_lon" id="min_lon" value="{{ form.min_lon }}" inputmode="decimal" />
+        </label>
+        <label>South (lat)
+          <input class="coord" type="text" name="min_lat" id="min_lat" value="{{ form.min_lat }}" inputmode="decimal" />
+        </label>
+        <label>East (lon)
+          <input class="coord" type="text" name="max_lon" id="max_lon" value="{{ form.max_lon }}" inputmode="decimal" />
+        </label>
+        <label>North (lat)
+          <input class="coord" type="text" name="max_lat" id="max_lat" value="{{ form.max_lat }}" inputmode="decimal" />
+        </label>
+      </div>
+
+      <div class="archive-block">
+        <p class="section-label">Primary dates</p>
+        <div class="chips" id="year-chips" aria-label="Quick year select">
+          <button type="button" class="chip" data-year="2023">2023</button>
+          <button type="button" class="chip" data-year="2024">2024</button>
+          <button type="button" class="chip" data-year="2025">2025</button>
+          <button type="button" class="chip" data-year="2026">2026 YTD</button>
+          <button type="button" class="chip" data-range="summer">Summer (Jun–Aug)</button>
+          <button type="button" class="chip" data-range="full">Full archive</button>
+        </div>
+        <div class="row" style="margin-top:0.55rem">
+          <label>Start date
+            <input type="date" name="start_date" id="start_date"
+                   min="{{ form.archive_min }}" max="{{ form.archive_max }}"
+                   value="{{ form.start_date }}" required />
+          </label>
+          <label>End date
+            <input type="date" name="end_date" id="end_date"
+                   min="{{ form.archive_min }}" max="{{ form.archive_max }}"
+                   value="{{ form.end_date }}" required />
+          </label>
+        </div>
+
+        <p class="section-label">Compare period</p>
+        <div class="row">
+          <label class="check">
+            <input type="checkbox" name="compare" value="1" id="compare"
+                   {% if form.compare == '1' %}checked{% endif %} />
+            Compare with another period
+          </label>
+          <label>Compare start
+            <input type="date" name="compare_start" id="compare_start"
+                   min="{{ form.archive_min }}" max="{{ form.archive_max }}"
+                   value="{{ form.compare_start }}" />
+          </label>
+          <label>Compare end
+            <input type="date" name="compare_end" id="compare_end"
+                   min="{{ form.archive_min }}" max="{{ form.archive_max }}"
+                   value="{{ form.compare_end }}" />
+          </label>
+        </div>
+        <p class="hint">
+          Archive span <strong>{{ form.archive_min }} → {{ form.archive_max }}</strong>.
+          Year chips fill dates and run automatically. Custom coordinates use west/south/east/north.
+        </p>
+      </div>
+    </form>
+
+    {% if error %}
+    <div class="error">{{ error }}</div>
+    {% endif %}
+
+    {% if result %}
+    <p class="source">{{ result.source_label }} · {{ result.rows }} points</p>
+    <div class="stats">
+      <div class="stat"><b>{{ result.summary.get('matched', 0) }}</b><span>Matched (map sample)</span></div>
+      <div class="stat"><b>{{ result.summary.get('modis_only', 0) }}</b><span>MODIS-only (sample)</span></div>
+      <div class="stat"><b>{{ result.summary.get('viirs_only', 0) }}</b><span>VIIRS-only (sample)</span></div>
+      <div class="stat"><b>{{ result.summary.get('total', result.rows) }}</b><span>Total in window</span></div>
+      <div class="stat"><b>{{ result.summary.get('frp_sum', 0) }}</b><span>FRP sum (MW)</span></div>
+    </div>
+
+    {% if result.compare %}
+    <h2>Period comparison</h2>
+    <p class="source">Primary vs {{ result.compare.label }}</p>
+    <div class="compare-grid">
+      {% for row in result.compare.rows %}
+      <div class="compare-card">
+        <span class="vs">{{ row.label }}</span>
+        <b style="display:block;font-size:1.15rem;color:var(--teal)">{{ row.primary }}</b>
+        <div class="vs">vs {{ row.comparison }}</div>
+        <div class="delta">{{ row.delta }} ({{ row.pct }})</div>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    <div class="legend">
+      <span><i class="dot" style="background:#00e5d4"></i>Matched</span>
+      <span><i class="dot" style="background:#14919b"></i>MODIS-only</span>
+      <span><i class="dot" style="background:#7df9ff"></i>VIIRS-only</span>
+      <span><i class="dot" style="background:#f0c674"></i>FRP (MW)</span>
+      <span><i class="dot" style="background:#f0c674;border-radius:0;width:12px;height:2px;vertical-align:middle"></i>Selected area</span>
+    </div>
+
+    <h2>Activity</h2>
+    <div class="panel"><div id="chart-wrap"><canvas id="chart"></canvas></div></div>
+
+    <h2>Map — hotspot points</h2>
+    <div id="map"></div>
+    <p class="map-caption" id="map-caption">Loading points…</p>
+
+    <script type="application/json" id="points-data">{{ result.points_json | safe }}</script>
+    <script type="application/json" id="series-data">{{ result.series_json | safe }}</script>
+    <script type="application/json" id="map-meta">{{ {
+      "center": result.map_center,
+      "zoom": result.map_zoom,
+      "bounds": result.map_bounds if result.map_bounds is defined else none,
+      "bbox": result.bbox if result.bbox is defined else none
+    } | tojson }}</script>
+    {% endif %}
+
+    <p class="foot">
+      <a href="https://github.com/egemen01yasin33-maker/modis-viirs-fire-calendar">GitHub</a>
+      · <a href="https://egemen01yasin33-maker.github.io/modis-viirs-fire-calendar/">Pitch deck</a>
+      · NASA FIRMS
+    </p>
+  </div>
+
+  <script>
+    (function () {
+      const areaMode = document.getElementById("area_mode");
+      const body = document.body;
+      const presetBboxes = {{ preset_bboxes | tojson }};
+      const region = document.getElementById("region");
+      const archMin = {{ form.archive_min | tojson }};
+      const archMax = {{ form.archive_max | tojson }};
+      const formEl = document.getElementById("run-form");
+      const modeBadge = document.getElementById("mode-badge");
+      const modeInput = document.getElementById("mode");
+      const nrtAvailable = {{ nrt_available | tojson }};
+
+      function syncArea() {
+        body.dataset.area = areaMode.value;
+        if (areaMode.value === "preset") syncCoordsFromRegion();
+      }
+
+      function syncCoordsFromRegion() {
+        const box = presetBboxes[region.value];
+        if (!box) return;
+        document.getElementById("min_lon").value = box[0];
+        document.getElementById("min_lat").value = box[1];
+        document.getElementById("max_lon").value = box[2];
+        document.getElementById("max_lat").value = box[3];
+      }
+
+      function clampIso(iso) {
+        if (iso < archMin) return archMin;
+        if (iso > archMax) return archMax;
+        return iso;
+      }
+
+      function refreshModeBadge() {
+        const start = document.getElementById("start_date").value;
+        const end = document.getElementById("end_date").value;
+        if (!start || !end) return;
+        const today = new Date();
+        const tIso = today.toISOString().slice(0, 10);
+        const span = Math.floor((new Date(end) - new Date(start)) / 86400000) + 1;
+        const recent = end >= tIso.slice(0, 8) + String(today.getDate()-1).padStart(2,"0") || end === tIso;
+        // Keep badge simple: archive unless a short live window ending today
+        const live = nrtAvailable && recent && span >= 1 && span <= {{ max_days }};
+        if (live) {
+          modeInput.value = "nrt";
+          modeBadge.textContent = "Live FIRMS NRT (auto from dates)";
+          body.dataset.mode = "nrt";
+        } else {
+          modeInput.value = "archive";
+          modeBadge.textContent = "Archive 2023–2026 (auto from dates)";
+          body.dataset.mode = "archive";
+        }
+      }
+
+      function setPrimary(start, end, autoRun) {
+        document.getElementById("start_date").value = clampIso(start);
+        document.getElementById("end_date").value = clampIso(end);
+        const s = new Date(start + "T00:00:00Z");
+        const e = new Date(end + "T00:00:00Z");
+        const cs = new Date(s); cs.setUTCFullYear(cs.getUTCFullYear() - 1);
+        const ce = new Date(e); ce.setUTCFullYear(ce.getUTCFullYear() - 1);
+        const toIso = (d) => d.toISOString().slice(0, 10);
+        document.getElementById("compare_start").value = clampIso(toIso(cs));
+        document.getElementById("compare_end").value = clampIso(toIso(ce));
+        document.getElementById("compare").checked = true;
+        refreshModeBadge();
+        if (autoRun) formEl.requestSubmit();
+      }
+
+      document.getElementById("year-chips").addEventListener("click", (ev) => {
+        const btn = ev.target.closest(".chip");
+        if (!btn) return;
+        document.querySelectorAll("#year-chips .chip").forEach((c) => c.classList.remove("active"));
+        btn.classList.add("active");
+        if (btn.dataset.year) {
+          const y = btn.dataset.year;
+          if (y === "2026") setPrimary("2026-01-01", archMax, true);
+          else setPrimary(`${y}-01-01`, `${y}-12-31`, true);
+          return;
+        }
+        if (btn.dataset.range === "full") {
+          setPrimary(archMin, archMax, true);
+          return;
+        }
+        if (btn.dataset.range === "summer") {
+          const y = (document.getElementById("end_date").value || archMax).slice(0, 4);
+          setPrimary(`${y}-06-01`, `${y}-08-31`, true);
+        }
+      });
+
+      areaMode.addEventListener("change", syncArea);
+      region.addEventListener("change", syncCoordsFromRegion);
+      document.getElementById("start_date").addEventListener("change", refreshModeBadge);
+      document.getElementById("end_date").addEventListener("change", refreshModeBadge);
+      syncArea();
+      refreshModeBadge();
+    })();
+  </script>
+
+  {% if result %}
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin="" defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" defer></script>
+  <script>
+    document.addEventListener("DOMContentLoaded", () => {
+      const points = JSON.parse(document.getElementById("points-data").textContent);
+      const series = JSON.parse(document.getElementById("series-data").textContent);
+      const meta = JSON.parse(document.getElementById("map-meta").textContent);
+
+      const ctx = document.getElementById("chart");
+      if (ctx && window.Chart) {
+        new Chart(ctx, {
+          type: "line",
+          data: {
+            labels: series.labels,
+            datasets: [
+              { label: "Matched", data: series.matched, borderColor: series.colors.matched, tension: 0.2, pointRadius: 1.5, yAxisID: "y" },
+              { label: "MODIS-only", data: series.modis, borderColor: series.colors.modis, tension: 0.2, pointRadius: 1.5, yAxisID: "y" },
+              { label: "VIIRS-only", data: series.viirs, borderColor: series.colors.viirs, tension: 0.2, pointRadius: 1.5, yAxisID: "y" },
+              {
+                label: "FRP (MW)",
+                data: series.frp || [],
+                borderColor: (series.colors && series.colors.frp) || "#f0c674",
+                backgroundColor: "rgba(240,198,116,0.12)",
+                tension: 0.2,
+                pointRadius: 1.5,
+                yAxisID: "yFrp",
+                borderDash: [5, 3],
+              },
+            ],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: "index", intersect: false },
+            plugins: { legend: { labels: { color: "#8aa0ad" } } },
+            scales: {
+              x: { ticks: { color: "#8aa0ad", maxTicksLimit: 8 }, grid: { color: "#24303a" } },
+              y: {
+                position: "left",
+                title: { display: true, text: "Hotspots", color: "#8aa0ad" },
+                ticks: { color: "#8aa0ad" },
+                grid: { color: "#24303a" },
+              },
+              yFrp: {
+                position: "right",
+                title: { display: true, text: "FRP (MW)", color: "#f0c674" },
+                ticks: { color: "#f0c674" },
+                grid: { drawOnChartArea: false },
+              },
+            },
+          },
+        });
+      }
+
+      if (window.L) {
+        const map = L.map("map", {
+          scrollWheelZoom: true,
+          preferCanvas: true,
+        });
+        // OpenStreetMap — free, no API key (Carto basemaps require a key).
+        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+          maxZoom: 19,
+          attribution: "&copy; OpenStreetMap contributors",
+        }).addTo(map);
+
+        const canvasRenderer = L.canvas({ padding: 0.5 });
+        const layer = L.layerGroup().addTo(map);
+
+        function pointRadius(frp) {
+          if (frp == null || Number.isNaN(frp)) return 2.5;
+          // Compact FRP-scaled dots (~2–5.5 px) so the map stays readable
+          return Math.max(2, Math.min(5.5, 2 + Math.sqrt(Math.max(frp, 0)) * 0.12));
+        }
+
+        for (const p of points) {
+          const frp = p.frp;
+          const frpTxt = (frp != null && !Number.isNaN(frp))
+            ? `<br>FRP: ${Number(frp).toFixed(1)} MW`
+            : "";
+          L.circleMarker([p.lat, p.lon], {
+            renderer: canvasRenderer,
+            radius: pointRadius(frp),
+            color: p.color || "#00e5d4",
+            weight: 0.5,
+            fillColor: p.color || "#00e5d4",
+            fillOpacity: 0.88,
+          }).addTo(layer).bindPopup(
+            `<strong>${p.c || "Hotspot"}</strong>${frpTxt}<br>${Number(p.lat).toFixed(4)}, ${Number(p.lon).toFixed(4)}`
+          );
+        }
+
+        const cap = document.getElementById("map-caption");
+        if (cap) {
+          cap.textContent = points.length
+            ? `${points.length.toLocaleString()} hotspot points on map (Matched / MODIS-only / VIIRS-only). Click a point for FRP.`
+            : "No hotspot points in this window — try another region or date range.";
+        }
+
+        let fit = null;
+        if (meta.bounds && meta.bounds.length === 2) {
+          const rect = L.rectangle(meta.bounds, {
+            color: "#f0c674",
+            weight: 2,
+            fillOpacity: 0.04,
+            dashArray: "6 4",
+          }).addTo(map);
+          fit = rect.getBounds();
+        }
+        if (points.length) {
+          const pb = L.latLngBounds(points.map((p) => [p.lat, p.lon]));
+          // Prefer point cloud bounds so dots fill the view (not an empty wide bbox)
+          fit = pb;
+        }
+        if (fit && fit.isValid()) {
+          map.fitBounds(fit.pad(0.12), { maxZoom: 11, animate: false });
+        } else {
+          map.setView(meta.center || [38, 35], meta.zoom || 6);
+        }
+        setTimeout(() => map.invalidateSize(), 80);
+        setTimeout(() => map.invalidateSize(), 400);
+      }
+    });
+  </script>
+  {% endif %}
+</body>
+</html>
