@@ -186,24 +186,30 @@ def _record_nrt_fetch() -> None:
     st.session_state.nrt_fetch_times = stamps[-NRT_MAX_FETCHES_PER_SESSION :]
 
 
-def render_map_key_input() -> None:
-    """Optional visitor MAP_KEY (session-only); never echoed back to logs."""
-    with st.expander("FIRMS MAP_KEY (optional, session only)", expanded=False):
+def render_map_key_input(*, expanded: bool = False) -> str:
+    """
+    Optional visitor MAP_KEY (session-only); never echoed back to logs.
+
+    Returns the resolved key for this run. Do not pass value="" into the
+    password widget — that wiped the key on every Streamlit rerun.
+    """
+    with st.expander("FIRMS MAP_KEY (optional, session only)", expanded=expanded):
         st.caption(
-            "Enter your own NASA FIRMS MAP_KEY for live NRT. "
-            "It stays in this browser session and is not written to disk."
+            "Paste your NASA FIRMS MAP_KEY here for live NRT. "
+            "It stays in this browser session only (not written to disk)."
         )
-        entered = st.text_input(
+        st.text_input(
             "MAP_KEY",
-            value="",
             type="password",
             key="visitor_map_key_input",
             autocomplete="off",
+            help="Get a key at https://firms.modaps.eosdis.nasa.gov/api/map_key",
         )
-        if entered.strip():
-            st.session_state.visitor_map_key = entered.strip()
-        elif "visitor_map_key" not in st.session_state:
-            st.session_state.visitor_map_key = ""
+        key = (st.session_state.get("visitor_map_key_input") or "").strip()
+        st.session_state.visitor_map_key = key
+        if key:
+            st.success("MAP_KEY loaded for this session.")
+    return (st.session_state.get("visitor_map_key") or "").strip()
 
 
 def guard_nrt_fetch(map_key: str) -> bool:
@@ -2160,23 +2166,30 @@ def main() -> None:
         st.session_state.nrt_fetch_times = []
         st.session_state.visitor_map_key = ""
 
-    render_map_key_input()
-
     # Prefer session uploads when present; otherwise shared operator archive
     upload_dir = session_upload_dir()
     session_inventory = describe_csv_files(upload_dir)
+    shared_inventory = describe_csv_files(DATA_PATH)
     archive_root = upload_dir if session_inventory else DATA_PATH
-    inventory = describe_csv_files(archive_root)
-    archive_date_min, archive_date_max = peek_archive_date_bounds(archive_root)
+    inventory = session_inventory or shared_inventory
+
+    # Render MAP_KEY first so the widget value is available this run
+    render_map_key_input(expanded=not inventory)
     map_key = get_firms_map_key()
     has_archive = bool(inventory)
     has_nrt = bool(map_key)
+    archive_date_min, archive_date_max = peek_archive_date_bounds(archive_root)
 
     if not has_archive and not has_nrt:
         st.warning(
             "No fire archive found. Upload CSVs or enter a FIRMS MAP_KEY for live data."
         )
-        with st.expander("Add archive files"):
+        st.info(
+            f"Multi-GB archives: copy `*.csv` into the app **`data/`** folder "
+            f"(`{DATA_PATH}`), then refresh. Browser upload is capped at "
+            f"{MAX_UPLOAD_BYTES // (1024 * 1024)} MiB × {MAX_UPLOAD_FILES} files."
+        )
+        with st.expander("Add archive files (browser)", expanded=True):
             st.caption(
                 f"Up to {MAX_UPLOAD_FILES} CSV files, "
                 f"{MAX_UPLOAD_BYTES // (1024 * 1024)} MiB each. "
@@ -2190,10 +2203,11 @@ def main() -> None:
             )
             if uploads:
                 try:
-                    save_uploaded_csvs(upload_dir, uploads)
+                    saved = save_uploaded_csvs(upload_dir, uploads)
                 except ArchiveCsvError as exc:
                     st.error(str(exc))
                     return
+                st.success(f"Saved: {', '.join(saved)}")
                 load_archive_slice.clear()
                 load_map_slice.clear()
                 st.rerun()
