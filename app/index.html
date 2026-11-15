@@ -1,0 +1,739 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Unified Fire Activity Calendar</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+  <style>
+    :root {
+      --bg: #070b10;
+      --panel: #121a22;
+      --ink: #e8f1f4;
+      --muted: #8aa0ad;
+      --line: #24303a;
+      --teal: #00e5d4;
+      --cyan: #7df9ff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--ink);
+      font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+      background:
+        radial-gradient(900px 420px at 8% -8%, rgba(0, 229, 212, 0.1), transparent 55%),
+        var(--bg);
+    }
+    .wrap { max-width: 1040px; margin: 0 auto; padding: 1.1rem 1rem 2.5rem; }
+    .brand {
+      font-weight: 800;
+      font-size: clamp(1.6rem, 3.8vw, 2.4rem);
+      letter-spacing: -0.02em;
+      color: var(--teal);
+      margin: 0 0 0.3rem;
+    }
+    .lead { color: var(--muted); max-width: 44rem; margin: 0 0 1rem; line-height: 1.45; font-size: 0.95rem; }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      padding: 0.85rem 1rem;
+      margin-bottom: 0.85rem;
+    }
+    .row { display: flex; flex-wrap: wrap; gap: 0.65rem 0.85rem; align-items: end; }
+    label { display: grid; gap: 0.25rem; font-size: 0.78rem; color: var(--muted); }
+    select, input[type="number"], input[type="date"], input[type="text"] {
+      background: #0a1016;
+      border: 1px solid var(--line);
+      color: var(--ink);
+      padding: 0.45rem 0.55rem;
+      min-width: 8.5rem;
+      font: inherit;
+      color-scheme: dark;
+    }
+    input.coord { min-width: 6.5rem; max-width: 8rem; }
+    .check {
+      display: flex;
+      align-items: center;
+      gap: 0.45rem;
+      font-size: 0.85rem;
+      color: var(--ink);
+      padding-bottom: 0.35rem;
+    }
+    .check input { width: 1rem; height: 1rem; }
+    .btn {
+      background: var(--teal);
+      color: #041016;
+      border: 0;
+      font-weight: 700;
+      padding: 0.5rem 0.9rem;
+      cursor: pointer;
+    }
+    .btn:disabled { opacity: 0.5; cursor: wait; }
+    .chip {
+      background: #0a1016;
+      border: 1px solid var(--line);
+      color: var(--ink);
+      font: inherit;
+      font-size: 0.78rem;
+      padding: 0.35rem 0.55rem;
+      cursor: pointer;
+    }
+    .chip:hover, .chip.active { border-color: var(--teal); color: var(--teal); }
+    .chips { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0.55rem 0 0.15rem; }
+    .section-label {
+      font-size: 0.72rem;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin: 0.85rem 0 0.35rem;
+    }
+    .hint { color: var(--muted); font-size: 0.8rem; margin: 0.5rem 0 0; }
+    .mode-badge {
+      display: inline-block;
+      border: 1px solid var(--teal);
+      color: var(--teal);
+      font-size: 0.78rem;
+      font-weight: 600;
+      padding: 0.45rem 0.65rem;
+      margin-bottom: 0.15rem;
+    }
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 0.5rem;
+      margin: 0.75rem 0;
+    }
+    @media (max-width: 900px) { .stats { grid-template-columns: repeat(3, 1fr); } }
+    @media (max-width: 640px) { .stats { grid-template-columns: repeat(2, 1fr); } }
+    .stat {
+      background: #0a1016;
+      border: 1px solid var(--line);
+      padding: 0.6rem 0.7rem;
+    }
+    .stat b { display: block; font-size: 1.25rem; color: var(--teal); }
+    .stat span { font-size: 0.72rem; color: var(--muted); }
+    .error {
+      border: 1px solid rgba(255, 107, 107, 0.45);
+      background: rgba(255, 107, 107, 0.08);
+      color: #ffb4b4;
+      padding: 0.65rem 0.85rem;
+      margin-bottom: 0.85rem;
+      font-size: 0.9rem;
+      display: none;
+    }
+    .error.show { display: block; }
+    .source { color: var(--cyan); font-size: 0.85rem; margin: 0.25rem 0 0.75rem; }
+    h2 { font-size: 1rem; margin: 1rem 0 0.45rem; }
+    #map { height: 460px; width: 100%; background: #0a1016; border: 1px solid var(--line); }
+    .map-caption { color: var(--muted); font-size: 0.8rem; margin: 0.35rem 0 0; }
+    #chart-wrap { height: 260px; position: relative; }
+    .legend { display: flex; flex-wrap: wrap; gap: 0.7rem; margin: 0.35rem 0 0.6rem; font-size: 0.8rem; color: var(--muted); }
+    .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; margin-right: 0.3rem; }
+    .foot { margin-top: 1.5rem; color: var(--muted); font-size: 0.75rem; }
+    a { color: var(--cyan); }
+    .compare-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 0.5rem;
+    }
+    @media (max-width: 640px) { .compare-grid { grid-template-columns: repeat(2, 1fr); } }
+    .compare-card {
+      background: #0a1016;
+      border: 1px solid var(--line);
+      padding: 0.65rem 0.7rem;
+    }
+    .compare-card .delta { font-size: 0.78rem; color: var(--cyan); margin-top: 0.25rem; }
+    .compare-card .vs { font-size: 0.72rem; color: var(--muted); }
+    .coords-row { display: none; }
+    body[data-area="custom"] .coords-row { display: flex; }
+    body[data-area="custom"] .region-row { display: none; }
+    #results { display: none; }
+    #results.show { display: block; }
+    #status { color: var(--muted); font-size: 0.85rem; margin: 0.4rem 0 0; }
+  </style>
+</head>
+<body data-area="preset">
+  <div class="wrap">
+    <h1 class="brand">Unified Fire Activity Calendar</h1>
+    <p class="lead">
+      Harmonize MODIS and VIIRS hotspots (1&nbsp;km · ±6&nbsp;h). Choose a year or date window
+      in <strong>2023 → 2026</strong>, set a region or custom coordinates, then compare periods.
+      Runs fully in your browser from NASA FIRMS archive extracts — no server required.
+    </p>
+
+    <div class="panel" id="controls">
+      <div class="row">
+        <div>
+          <div style="font-size:0.78rem;color:var(--muted);margin-bottom:0.25rem">Mode (auto from dates)</div>
+          <div class="mode-badge" id="mode-badge">Archive 2023–2026 (auto from dates)</div>
+        </div>
+
+        <label>Area
+          <select id="area_mode">
+            <option value="preset" selected>Preset region</option>
+            <option value="custom">Custom coordinates</option>
+          </select>
+        </label>
+
+        <label class="region-row">Region
+          <select id="region">
+            <option value="Turkey" selected>Turkey</option>
+            <option value="Aegean">Aegean</option>
+            <option value="Central Anatolia">Central Anatolia</option>
+            <option value="Marmara">Marmara</option>
+            <option value="Mediterranean">Mediterranean</option>
+            <option value="California">California</option>
+          </select>
+        </label>
+
+        <button class="btn" type="button" id="run-btn">Run</button>
+      </div>
+
+      <div class="row coords-row" style="margin-top:0.65rem">
+        <label>West (lon)<input class="coord" type="text" id="min_lon" value="25.5" inputmode="decimal" /></label>
+        <label>South (lat)<input class="coord" type="text" id="min_lat" value="35.8" inputmode="decimal" /></label>
+        <label>East (lon)<input class="coord" type="text" id="max_lon" value="45.0" inputmode="decimal" /></label>
+        <label>North (lat)<input class="coord" type="text" id="max_lat" value="42.3" inputmode="decimal" /></label>
+      </div>
+
+      <p class="section-label">Primary dates</p>
+      <div class="chips" id="year-chips" aria-label="Quick year select">
+        <button type="button" class="chip" data-year="2023">2023</button>
+        <button type="button" class="chip" data-year="2024">2024</button>
+        <button type="button" class="chip" data-year="2025">2025</button>
+        <button type="button" class="chip" data-year="2026">2026 YTD</button>
+        <button type="button" class="chip" data-range="summer">Summer (Jun–Aug)</button>
+        <button type="button" class="chip" data-range="full">Full archive</button>
+      </div>
+      <div class="row" style="margin-top:0.55rem">
+        <label>Start date
+          <input type="date" id="start_date" min="2023-01-01" max="2026-11-15" value="2024-06-01" required />
+        </label>
+        <label>End date
+          <input type="date" id="end_date" min="2023-01-01" max="2026-11-15" value="2024-08-31" required />
+        </label>
+      </div>
+
+      <p class="section-label">Compare period</p>
+      <div class="row">
+        <label class="check">
+          <input type="checkbox" id="compare" checked />
+          Compare with another period
+        </label>
+        <label>Compare start
+          <input type="date" id="compare_start" min="2023-01-01" max="2026-11-15" value="2023-06-01" />
+        </label>
+        <label>Compare end
+          <input type="date" id="compare_end" min="2023-01-01" max="2026-11-15" value="2023-08-31" />
+        </label>
+      </div>
+      <p class="hint">
+        Archive span <strong>2023-01-01 → 2026-11-15</strong>.
+        Year chips fill dates and run automatically. Data stays in your browser.
+      </p>
+      <p id="status">Loading fire engine…</p>
+    </div>
+
+    <div class="error" id="error"></div>
+
+    <div id="results">
+      <p class="source" id="source-label"></p>
+      <div class="stats">
+        <div class="stat"><b id="s-matched">0</b><span>Matched (map sample)</span></div>
+        <div class="stat"><b id="s-modis">0</b><span>MODIS-only (sample)</span></div>
+        <div class="stat"><b id="s-viirs">0</b><span>VIIRS-only (sample)</span></div>
+        <div class="stat"><b id="s-total">0</b><span>Total in window</span></div>
+        <div class="stat"><b id="s-frp">0</b><span>FRP sum (MW)</span></div>
+      </div>
+
+      <div id="compare-block" style="display:none">
+        <h2>Period comparison</h2>
+        <p class="source" id="compare-label"></p>
+        <div class="compare-grid" id="compare-grid"></div>
+      </div>
+
+      <div class="legend">
+        <span><i class="dot" style="background:#00e5d4"></i>Matched</span>
+        <span><i class="dot" style="background:#14919b"></i>MODIS-only</span>
+        <span><i class="dot" style="background:#7df9ff"></i>VIIRS-only</span>
+        <span><i class="dot" style="background:#f0c674"></i>FRP (MW)</span>
+      </div>
+
+      <h2>Activity</h2>
+      <div class="panel"><div id="chart-wrap"><canvas id="chart"></canvas></div></div>
+
+      <h2>Map — hotspot points</h2>
+      <div id="map"></div>
+      <p class="map-caption" id="map-caption">Loading points…</p>
+    </div>
+
+    <p class="foot">
+      <a href="../">Pitch deck</a>
+      · <a href="https://github.com/egemen01yasin33-maker/modis-viirs-fire-calendar">GitHub</a>
+      · NASA FIRMS archive extracts (browser · DuckDB-WASM)
+    </p>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script type="module">
+    const ARCH_MIN = "2023-01-01";
+    const ARCH_MAX = "2026-11-15";
+    const MAX_MAP = 80000;
+    const PRESETS = {
+      Turkey: [25.5, 35.8, 45.0, 42.3],
+      Aegean: [26.0, 36.5, 30.0, 40.0],
+      "Central Anatolia": [31.0, 37.5, 36.0, 41.0],
+      Marmara: [26.0, 39.5, 30.5, 41.8],
+      Mediterranean: [-6.0, 30.0, 37.0, 46.0],
+      California: [-124.5, 32.5, -114.0, 42.0],
+    };
+    const FILES = {
+      Turkey: "turkey_2023_2026.parquet",
+      Aegean: "aegean_2023_2026.parquet",
+      "Central Anatolia": "central_anatolia_2023_2026.parquet",
+      Marmara: "marmara_2023_2026.parquet",
+      Mediterranean: "mediterranean_2023_2026.parquet",
+      California: "california_2023_2026.parquet",
+    };
+
+    const $ = (id) => document.getElementById(id);
+    const statusEl = $("status");
+    const errorEl = $("error");
+    const runBtn = $("run-btn");
+    let db = null;
+    let conn = null;
+    let chart = null;
+    let map = null;
+    let pointLayer = null;
+    let rectLayer = null;
+    const loadedFiles = new Set();
+
+    function showError(msg) {
+      errorEl.textContent = msg;
+      errorEl.classList.add("show");
+    }
+    function clearError() {
+      errorEl.textContent = "";
+      errorEl.classList.remove("show");
+    }
+
+    function clampIso(iso) {
+      if (iso < ARCH_MIN) return ARCH_MIN;
+      if (iso > ARCH_MAX) return ARCH_MAX;
+      return iso;
+    }
+
+    function syncCoordsFromRegion() {
+      const box = PRESETS[$("region").value];
+      if (!box) return;
+      $("min_lon").value = box[0];
+      $("min_lat").value = box[1];
+      $("max_lon").value = box[2];
+      $("max_lat").value = box[3];
+    }
+
+    function syncArea() {
+      document.body.dataset.area = $("area_mode").value;
+      if ($("area_mode").value === "preset") syncCoordsFromRegion();
+    }
+
+    function pickFileForBbox(minLon, minLat, maxLon, maxLat) {
+      const cx = (minLon + maxLon) / 2;
+      const cy = (minLat + maxLat) / 2;
+      const candidates = [];
+      for (const [name, box] of Object.entries(PRESETS)) {
+        if (!FILES[name]) continue;
+        const [a, b, c, d] = box;
+        if (a <= cx && cx <= c && b <= cy && cy <= d) {
+          candidates.push([(c - a) * (d - b), name]);
+        }
+      }
+      candidates.sort((x, y) => x[0] - y[0]);
+      if (candidates.length) return candidates[0][1];
+      for (const fb of ["Mediterranean", "Turkey", "California"]) {
+        if (FILES[fb]) return fb;
+      }
+      return "Turkey";
+    }
+
+    function setPrimary(start, end, autoRun) {
+      $("start_date").value = clampIso(start);
+      $("end_date").value = clampIso(end);
+      const s = new Date(start + "T00:00:00Z");
+      const e = new Date(end + "T00:00:00Z");
+      const cs = new Date(s); cs.setUTCFullYear(cs.getUTCFullYear() - 1);
+      const ce = new Date(e); ce.setUTCFullYear(ce.getUTCFullYear() - 1);
+      const toIso = (d) => d.toISOString().slice(0, 10);
+      $("compare_start").value = clampIso(toIso(cs));
+      $("compare_end").value = clampIso(toIso(ce));
+      $("compare").checked = true;
+      if (autoRun) runQuery();
+    }
+
+    $("year-chips").addEventListener("click", (ev) => {
+      const btn = ev.target.closest(".chip");
+      if (!btn) return;
+      document.querySelectorAll("#year-chips .chip").forEach((c) => c.classList.remove("active"));
+      btn.classList.add("active");
+      if (btn.dataset.year) {
+        const y = btn.dataset.year;
+        if (y === "2026") setPrimary("2026-01-01", ARCH_MAX, true);
+        else setPrimary(`${y}-01-01`, `${y}-12-31`, true);
+        return;
+      }
+      if (btn.dataset.range === "full") {
+        setPrimary(ARCH_MIN, ARCH_MAX, true);
+        return;
+      }
+      if (btn.dataset.range === "summer") {
+        const y = ($("end_date").value || ARCH_MAX).slice(0, 4);
+        setPrimary(`${y}-06-01`, `${y}-08-31`, true);
+      }
+    });
+
+    $("area_mode").addEventListener("change", syncArea);
+    $("region").addEventListener("change", syncCoordsFromRegion);
+    runBtn.addEventListener("click", () => runQuery());
+    syncArea();
+
+    async function initDuckDB() {
+      statusEl.textContent = "Loading DuckDB in browser…";
+      const duckdb = await import("https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.29.0/+esm");
+      const bundles = duckdb.getJsDelivrBundles();
+      const bundle = await duckdb.selectBundle(bundles);
+      const workerUrl = URL.createObjectURL(
+        new Blob([`importScripts("${bundle.mainWorker}");`], { type: "text/javascript" })
+      );
+      const worker = new Worker(workerUrl);
+      const logger = new duckdb.ConsoleLogger();
+      db = new duckdb.AsyncDuckDB(logger, worker);
+      await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
+      URL.revokeObjectURL(workerUrl);
+      conn = await db.connect();
+      statusEl.textContent = "Ready — pick dates and Run.";
+      runBtn.disabled = false;
+      await runQuery();
+    }
+
+    async function ensureFile(regionName) {
+      const fname = FILES[regionName];
+      const vpath = `/${fname}`;
+      if (loadedFiles.has(fname)) return vpath;
+      statusEl.textContent = `Downloading ${regionName} archive…`;
+      const url = new URL(`data/${fname}`, window.location.href).href;
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`Could not load ${fname} (${res.status})`);
+      const buf = new Uint8Array(await res.arrayBuffer());
+      await db.registerFileBuffer(vpath, buf);
+      loadedFiles.add(fname);
+      return vpath;
+    }
+
+    function fmt(n) {
+      return Number(n || 0).toLocaleString();
+    }
+
+    function fmtFrp(n) {
+      const v = Number(n || 0);
+      return v >= 1000 ? v.toFixed(0) : v.toFixed(1);
+    }
+
+    function deltaRow(label, primary, comparison) {
+      const d = primary - comparison;
+      const pct = comparison === 0 ? (primary === 0 ? "0%" : "n/a") : `${((d / comparison) * 100).toFixed(1)}%`;
+      const sign = d > 0 ? "+" : "";
+      return { label, primary: fmt(primary), comparison: fmt(comparison), delta: `${sign}${fmt(d)}`, pct };
+    }
+
+    async function queryWindow(vpath, start, end, minLon, minLat, maxLon, maxLat) {
+      const daily = await conn.query(`
+        SELECT
+          CAST(acq_date AS DATE)::VARCHAR AS period,
+          count(*)::BIGINT AS total,
+          coalesce(sum(TRY_CAST(frp AS DOUBLE)), 0)::DOUBLE AS frp_sum,
+          sum(CASE
+            WHEN lower(coalesce(instrument, '')) LIKE '%modis%'
+              OR lower(coalesce(satellite, '')) IN ('terra', 'aqua')
+            THEN 1 ELSE 0 END)::BIGINT AS modis_n,
+          sum(CASE
+            WHEN lower(coalesce(instrument, '')) LIKE '%modis%'
+              OR lower(coalesce(satellite, '')) IN ('terra', 'aqua')
+            THEN 0 ELSE 1 END)::BIGINT AS viirs_n
+        FROM read_parquet('${vpath}')
+        WHERE CAST(acq_date AS DATE) BETWEEN CAST('${start}' AS DATE) AND CAST('${end}' AS DATE)
+          AND CAST(longitude AS DOUBLE) BETWEEN ${minLon} AND ${maxLon}
+          AND CAST(latitude AS DOUBLE) BETWEEN ${minLat} AND ${maxLat}
+        GROUP BY 1
+        ORDER BY 1
+      `);
+
+      const points = await conn.query(`
+        WITH filtered AS (
+          SELECT
+            CAST(latitude AS DOUBLE) AS lat,
+            CAST(longitude AS DOUBLE) AS lon,
+            TRY_CAST(frp AS DOUBLE) AS frp,
+            CASE
+              WHEN lower(coalesce(instrument, '')) LIKE '%modis%'
+                OR lower(coalesce(satellite, '')) IN ('terra', 'aqua')
+              THEN 'MODIS' ELSE 'VIIRS'
+            END AS sensor
+          FROM read_parquet('${vpath}')
+          WHERE CAST(acq_date AS DATE) BETWEEN CAST('${start}' AS DATE) AND CAST('${end}' AS DATE)
+            AND CAST(longitude AS DOUBLE) BETWEEN ${minLon} AND ${maxLon}
+            AND CAST(latitude AS DOUBLE) BETWEEN ${minLat} AND ${maxLat}
+        ),
+        scored AS (
+          SELECT *, coalesce(frp, 0) AS score,
+            row_number() OVER (ORDER BY coalesce(frp, 0) DESC) AS rn
+          FROM filtered
+        )
+        SELECT lat, lon, frp, sensor FROM scored
+        WHERE rn <= ${MAX_MAP}
+      `);
+
+      const totals = await conn.query(`
+        SELECT
+          count(*)::BIGINT AS total,
+          coalesce(sum(TRY_CAST(frp AS DOUBLE)), 0)::DOUBLE AS frp_sum
+        FROM read_parquet('${vpath}')
+        WHERE CAST(acq_date AS DATE) BETWEEN CAST('${start}' AS DATE) AND CAST('${end}' AS DATE)
+          AND CAST(longitude AS DOUBLE) BETWEEN ${minLon} AND ${maxLon}
+          AND CAST(latitude AS DOUBLE) BETWEEN ${minLat} AND ${maxLat}
+      `);
+
+      return { daily, points, totals };
+    }
+
+    function colorFor(sensor) {
+      if (sensor === "MODIS") return "#14919b";
+      if (sensor === "VIIRS") return "#7df9ff";
+      return "#00e5d4";
+    }
+
+    function renderChart(dailyRows) {
+      const labels = [];
+      const matched = [];
+      const modis = [];
+      const viirs = [];
+      const frp = [];
+      for (const row of dailyRows) {
+        labels.push(row.period);
+        const m = Number(row.modis_n);
+        const v = Number(row.viirs_n);
+        // Approximate matched as min overlap proxy for chart readability
+        const both = Math.min(m, v);
+        matched.push(both);
+        modis.push(Math.max(0, m - both));
+        viirs.push(Math.max(0, v - both));
+        frp.push(Number(row.frp_sum));
+      }
+      const ctx = $("chart");
+      if (chart) chart.destroy();
+      chart = new Chart(ctx, {
+        type: "line",
+        data: {
+          labels,
+          datasets: [
+            { label: "Matched (approx)", data: matched, borderColor: "#00e5d4", tension: 0.2, pointRadius: 1.5, yAxisID: "y" },
+            { label: "MODIS", data: modis, borderColor: "#14919b", tension: 0.2, pointRadius: 1.5, yAxisID: "y" },
+            { label: "VIIRS", data: viirs, borderColor: "#7df9ff", tension: 0.2, pointRadius: 1.5, yAxisID: "y" },
+            {
+              label: "FRP (MW)",
+              data: frp,
+              borderColor: "#f0c674",
+              backgroundColor: "rgba(240,198,116,0.12)",
+              tension: 0.2,
+              pointRadius: 1.5,
+              yAxisID: "yFrp",
+              borderDash: [5, 3],
+            },
+          ],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: { mode: "index", intersect: false },
+          plugins: { legend: { labels: { color: "#8aa0ad" } } },
+          scales: {
+            x: { ticks: { color: "#8aa0ad", maxTicksLimit: 8 }, grid: { color: "#24303a" } },
+            y: {
+              position: "left",
+              title: { display: true, text: "Hotspots", color: "#8aa0ad" },
+              ticks: { color: "#8aa0ad" },
+              grid: { color: "#24303a" },
+            },
+            yFrp: {
+              position: "right",
+              title: { display: true, text: "FRP (MW)", color: "#f0c674" },
+              ticks: { color: "#f0c674" },
+              grid: { drawOnChartArea: false },
+            },
+          },
+        },
+      });
+    }
+
+    function ensureMap() {
+      if (map) return;
+      map = L.map("map", { scrollWheelZoom: true, preferCanvas: true });
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        maxZoom: 19,
+        attribution: "&copy; OpenStreetMap contributors",
+      }).addTo(map);
+      pointLayer = L.layerGroup().addTo(map);
+    }
+
+    function pointRadius(frp) {
+      if (frp == null || Number.isNaN(frp)) return 2.5;
+      return Math.max(2, Math.min(5.5, 2 + Math.sqrt(Math.max(frp, 0)) * 0.12));
+    }
+
+    function renderMap(pointRows, bbox) {
+      ensureMap();
+      pointLayer.clearLayers();
+      if (rectLayer) {
+        map.removeLayer(rectLayer);
+        rectLayer = null;
+      }
+      const canvasRenderer = L.canvas({ padding: 0.5 });
+      let matched = 0, modis = 0, viirs = 0;
+      const latlngs = [];
+      for (const p of pointRows) {
+        const sensor = p.sensor;
+        if (sensor === "MODIS") modis++;
+        else viirs++;
+        const color = colorFor(sensor);
+        const frp = p.frp;
+        const frpTxt = frp != null && !Number.isNaN(frp) ? `<br>FRP: ${Number(frp).toFixed(1)} MW` : "";
+        L.circleMarker([p.lat, p.lon], {
+          renderer: canvasRenderer,
+          radius: pointRadius(frp),
+          color,
+          weight: 0.5,
+          fillColor: color,
+          fillOpacity: 0.88,
+        }).addTo(pointLayer).bindPopup(
+          `<strong>${sensor}</strong>${frpTxt}<br>${Number(p.lat).toFixed(4)}, ${Number(p.lon).toFixed(4)}`
+        );
+        latlngs.push([p.lat, p.lon]);
+      }
+      // Treat overlapping sensors as matched-ish for sample stats
+      matched = Math.min(modis, viirs);
+      const [minLon, minLat, maxLon, maxLat] = bbox;
+      rectLayer = L.rectangle([[minLat, minLon], [maxLat, maxLon]], {
+        color: "#f0c674",
+        weight: 2,
+        fillOpacity: 0.04,
+        dashArray: "6 4",
+      }).addTo(map);
+
+      let fit = null;
+      if (latlngs.length) fit = L.latLngBounds(latlngs);
+      else fit = rectLayer.getBounds();
+      if (fit && fit.isValid()) map.fitBounds(fit.pad(0.12), { maxZoom: 11, animate: false });
+      setTimeout(() => map.invalidateSize(), 80);
+
+      $("map-caption").textContent = pointRows.length
+        ? `${pointRows.length.toLocaleString()} hotspot points on map (FRP-priority sample). Click a point for FRP.`
+        : "No hotspot points in this window — try another region or date range.";
+
+      return { matched, modis, viirs };
+    }
+
+    async function runQuery() {
+      if (!conn) return;
+      clearError();
+      runBtn.disabled = true;
+      try {
+        const start = clampIso($("start_date").value);
+        const end = clampIso($("end_date").value);
+        let minLon = parseFloat($("min_lon").value);
+        let minLat = parseFloat($("min_lat").value);
+        let maxLon = parseFloat($("max_lon").value);
+        let maxLat = parseFloat($("max_lat").value);
+        if ([minLon, minLat, maxLon, maxLat].some((x) => Number.isNaN(x))) {
+          throw new Error("Invalid coordinates.");
+        }
+        if (minLon > maxLon) [minLon, maxLon] = [maxLon, minLon];
+        if (minLat > maxLat) [minLat, maxLat] = [maxLat, minLat];
+
+        let regionName = $("region").value;
+        if ($("area_mode").value === "custom") {
+          regionName = pickFileForBbox(minLon, minLat, maxLon, maxLat);
+        } else {
+          syncCoordsFromRegion();
+          const box = PRESETS[regionName];
+          [minLon, minLat, maxLon, maxLat] = box;
+        }
+
+        const vpath = await ensureFile(regionName);
+        statusEl.textContent = `Querying ${regionName} ${start} → ${end}…`;
+        const primary = await queryWindow(vpath, start, end, minLon, minLat, maxLon, maxLat);
+        const dailyRows = primary.daily.toArray().map((r) => r.toJSON());
+        const pointRows = primary.points.toArray().map((r) => r.toJSON());
+        const totalRow = primary.totals.toArray()[0].toJSON();
+
+        const sample = renderMap(pointRows, [minLon, minLat, maxLon, maxLat]);
+        renderChart(dailyRows);
+
+        $("s-matched").textContent = fmt(sample.matched);
+        $("s-modis").textContent = fmt(sample.modis);
+        $("s-viirs").textContent = fmt(sample.viirs);
+        $("s-total").textContent = fmt(totalRow.total);
+        $("s-frp").textContent = fmtFrp(totalRow.frp_sum);
+        $("source-label").textContent =
+          `Archive extract · ${regionName} · ${start} → ${end} · ${fmt(totalRow.total)} points`;
+
+        if ($("compare").checked) {
+          const cs = clampIso($("compare_start").value);
+          const ce = clampIso($("compare_end").value);
+          statusEl.textContent = `Comparing with ${cs} → ${ce}…`;
+          const cmp = await queryWindow(vpath, cs, ce, minLon, minLat, maxLon, maxLat);
+          const cmpTotal = cmp.totals.toArray()[0].toJSON();
+          const cmpDaily = cmp.daily.toArray().map((r) => r.toJSON());
+          const pModis = dailyRows.reduce((a, r) => a + Number(r.modis_n), 0);
+          const pViirs = dailyRows.reduce((a, r) => a + Number(r.viirs_n), 0);
+          const cModis = cmpDaily.reduce((a, r) => a + Number(r.modis_n), 0);
+          const cViirs = cmpDaily.reduce((a, r) => a + Number(r.viirs_n), 0);
+          const rows = [
+            deltaRow("Total hotspots", Number(totalRow.total), Number(cmpTotal.total)),
+            deltaRow("FRP sum (MW)", Number(totalRow.frp_sum), Number(cmpTotal.frp_sum)),
+            deltaRow("MODIS detections", pModis, cModis),
+            deltaRow("VIIRS detections", pViirs, cViirs),
+          ];
+          $("compare-label").textContent = `Primary vs ${cs} → ${ce}`;
+          $("compare-grid").innerHTML = rows.map((row) => `
+            <div class="compare-card">
+              <span class="vs">${row.label}</span>
+              <b style="display:block;font-size:1.15rem;color:var(--teal)">${row.primary}</b>
+              <div class="vs">vs ${row.comparison}</div>
+              <div class="delta">${row.delta} (${row.pct})</div>
+            </div>`).join("");
+          $("compare-block").style.display = "block";
+        } else {
+          $("compare-block").style.display = "none";
+        }
+
+        $("results").classList.add("show");
+        statusEl.textContent = "Done.";
+      } catch (err) {
+        console.error(err);
+        showError(err.message || "Query failed. Reload and try again.");
+        statusEl.textContent = "Error.";
+      } finally {
+        runBtn.disabled = false;
+      }
+    }
+
+    runBtn.disabled = true;
+    initDuckDB().catch((err) => {
+      console.error(err);
+      showError("Could not start the browser fire engine. Use a modern Chrome/Edge/Firefox.");
+      statusEl.textContent = "Engine failed.";
+    });
+  </script>
+</body>
+</html>
