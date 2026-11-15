@@ -42,7 +42,7 @@
     }
     .row { display: flex; flex-wrap: wrap; gap: 0.65rem 0.85rem; align-items: end; }
     label { display: grid; gap: 0.25rem; font-size: 0.78rem; color: var(--muted); }
-    select, input[type="number"] {
+    select, input[type="number"], input[type="password"] {
       background: #0a1016;
       border: 1px solid var(--line);
       color: var(--ink);
@@ -58,6 +58,7 @@
       padding: 0.5rem 0.9rem;
       cursor: pointer;
     }
+    .hint { color: var(--muted); font-size: 0.8rem; margin: 0.5rem 0 0; }
     .stats {
       display: grid;
       grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -98,12 +99,13 @@
     </p>
 
     <form class="panel" method="post" action="/run">
+      <input type="hidden" name="csrf_token" value="{{ csrf }}" />
       <div class="row">
         <label>Mode
-          <select name="mode">
+          <select name="mode" id="mode">
             <option value="sample" {% if mode == 'sample' %}selected{% endif %}>Sample demo</option>
-            <option value="nrt" {% if mode == 'nrt' %}selected{% endif %} {% if not has_key %}disabled{% endif %}>
-              Live NRT{% if not has_key %} (no key){% endif %}
+            <option value="nrt" {% if mode == 'nrt' %}selected{% endif %} {% if not nrt_available %}disabled{% endif %}>
+              Live FIRMS NRT{% if not nrt_available %} (not configured){% endif %}
             </option>
           </select>
         </label>
@@ -117,8 +119,14 @@
         <label>NRT days
           <input type="number" name="days" min="1" max="{{ max_days }}" value="{{ days }}" />
         </label>
+        <label>Access code (live NRT)
+          <input type="password" name="access_code" autocomplete="off" placeholder="required for live" />
+        </label>
         <button class="btn" type="submit">Run</button>
       </div>
+      <p class="hint">
+        Sample mode is open. Live FIRMS needs the operator access code (not your MAP_KEY) and is rate-limited per network.
+      </p>
     </form>
 
     {% if error %}
