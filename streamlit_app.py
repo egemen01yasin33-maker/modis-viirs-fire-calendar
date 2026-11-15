@@ -2248,13 +2248,13 @@ def main() -> None:
 
     if not has_archive and not has_nrt:
         st.warning(
-            "No fire archive found. Restore the full set from Drive, "
+            "No fire archive found. Restore the full set from GitHub Release, "
             "or set FIRMS_MAP_KEY for live NRT only."
         )
         st.info(
-            "The **full** MODIS + VIIRS archive (~6.5 GB) is not in git. "
-            "Use **Restore full archives from Drive** once — Drive links must "
-            "stay as Anyone-with-the-link. Local files already present are kept."
+            "The **full** MODIS + VIIRS archive (~6.5 GB) lives on GitHub Release "
+            "`archive-data-v1` (not in git). Click restore once — existing local "
+            "files are kept."
         )
         try:
             need = missing_archives(DATA_PATH)
@@ -2262,20 +2262,13 @@ def main() -> None:
             need = []
         if need:
             st.caption(f"{len(need)} archive file(s) missing from `{DATA_PATH}`.")
-        if st.button(
-            "Restore full archives from Drive",
-            type="primary",
-            key="restore_full_archives",
-        ):
+
+        def _run_restore() -> None:
             with st.spinner(
-                "Downloading full archive set from Drive (~6.5 GB). "
-                "This can take several minutes…"
+                "Downloading full archive set from GitHub Release (~6.5 GB). "
+                "First launch can take several minutes…"
             ):
-                try:
-                    saved = restore_archives(DATA_PATH, only_missing=True)
-                except ArchiveCsvError as exc:
-                    st.error(str(exc))
-                    return
+                saved = restore_archives(DATA_PATH, only_missing=True)
             st.success(f"Ready: {len(saved)} archive file(s). Building index…")
             try:
                 ensure_hotspots_db(DATA_PATH)
@@ -2285,11 +2278,31 @@ def main() -> None:
             load_archive_slice.clear()
             load_map_slice.clear()
             st.rerun()
+
+        # Hosted apps: pull archives automatically on first empty boot
+        hosted = bool(os.getenv("CURSOR_APP_ID") or os.getenv("VERCEL"))
+        if hosted and need and not st.session_state.get("_auto_restore_tried"):
+            st.session_state._auto_restore_tried = True
+            try:
+                _run_restore()
+            except ArchiveCsvError as exc:
+                st.error(str(exc))
+
+        if st.button(
+            "Restore full archives from GitHub",
+            type="primary",
+            key="restore_full_archives",
+        ):
+            try:
+                _run_restore()
+            except ArchiveCsvError as exc:
+                st.error(str(exc))
+                return
         with st.expander("Add archive files (browser)", expanded=False):
             st.caption(
                 f"Only for small files "
                 f"({MAX_UPLOAD_BYTES // (1024 * 1024)} MiB × {MAX_UPLOAD_FILES}). "
-                "Full archives should use Drive restore above."
+                "Full archives should use GitHub restore above."
             )
             uploads = st.file_uploader(
                 "Upload CSV",

@@ -1,52 +1,63 @@
 {
-  "description": "Full FIRMS archive set for Unified Fire Activity Calendar (MODIS + VIIRS). Keep Drive links as Anyone-with-the-link so cloud/publish can restore without re-uploading.",
+  "description": "Full FIRMS archive set (MODIS + VIIRS). Prefer GitHub Release downloads; Drive IDs are fallback only.",
+  "github_repo": "egemen01yasin33-maker/modis-viirs-fire-calendar",
+  "github_tag": "archive-data-v1",
+  "release_url": "https://github.com/egemen01yasin33-maker/modis-viirs-fire-calendar/releases/tag/archive-data-v1",
   "files": [
     {
       "name": "fire_archive_J2V-C2_848749.csv",
       "drive_id": "19BDhdEStKxL5yCBspm35gzPgw5yyl06K",
+      "github_url": "https://github.com/egemen01yasin33-maker/modis-viirs-fire-calendar/releases/download/archive-data-v1/fire_archive_J2V-C2_848749.csv",
       "approx_bytes": 1431252771,
       "sensor": "VIIRS NOAA-21"
     },
     {
       "name": "fire_archive_J2V-C2_848764.csv",
       "drive_id": "12funsGEo1CGfDX9sDe4VmwDqCMBr7nhF",
+      "github_url": "https://github.com/egemen01yasin33-maker/modis-viirs-fire-calendar/releases/download/archive-data-v1/fire_archive_J2V-C2_848764.csv",
       "approx_bytes": 739137126,
       "sensor": "VIIRS NOAA-21"
     },
     {
       "name": "fire_archive_J2V-C2_850947.csv",
       "drive_id": "1v9zo520g-NxffjsMEjhGQwXlT1ay1Aob",
+      "github_url": "https://github.com/egemen01yasin33-maker/modis-viirs-fire-calendar/releases/download/archive-data-v1/fire_archive_J2V-C2_850947.csv",
       "approx_bytes": 1762211227,
       "sensor": "VIIRS NOAA-21"
     },
     {
       "name": "fire_archive_J2V-C2_850948.csv",
       "drive_id": "10YTYRp2E4keJYK72MyP7OQrmVDc5fL0k",
+      "github_url": "https://github.com/egemen01yasin33-maker/modis-viirs-fire-calendar/releases/download/archive-data-v1/fire_archive_J2V-C2_850948.csv",
       "approx_bytes": 1473068484,
       "sensor": "VIIRS NOAA-21"
     },
     {
       "name": "fire_archive_M-C61_851028.csv",
       "drive_id": "1yslvqnYdhTzZFMFpyFLpAczzzCpai749",
-      "approx_bytes": 375000000,
+      "github_url": "https://github.com/egemen01yasin33-maker/modis-viirs-fire-calendar/releases/download/archive-data-v1/fire_archive_M-C61_851028.csv",
+      "approx_bytes": 375060253,
       "sensor": "MODIS"
     },
     {
       "name": "fire_archive_M-C61_851029.csv",
       "drive_id": "1ja6g0HoXr8v7couoHcPbkpDclctmEFKG",
-      "approx_bytes": 389000000,
+      "github_url": "https://github.com/egemen01yasin33-maker/modis-viirs-fire-calendar/releases/download/archive-data-v1/fire_archive_M-C61_851029.csv",
+      "approx_bytes": 388864604,
       "sensor": "MODIS"
     },
     {
       "name": "fire_archive_M-C61_851030.csv",
       "drive_id": "1K4lcrRxwGzq9OabviZVbsI40hRSB8qwC",
-      "approx_bytes": 296000000,
+      "github_url": "https://github.com/egemen01yasin33-maker/modis-viirs-fire-calendar/releases/download/archive-data-v1/fire_archive_M-C61_851030.csv",
+      "approx_bytes": 295723960,
       "sensor": "MODIS"
     },
     {
       "name": "fire_nrt_M-C61_851031.csv",
       "drive_id": "1-ldLzxKKvEjnOwg5EbEadGTl16MSK3S4",
-      "approx_bytes": 69900000,
+      "github_url": "https://github.com/egemen01yasin33-maker/modis-viirs-fire-calendar/releases/download/archive-data-v1/fire_nrt_M-C61_851031.csv",
+      "approx_bytes": 69915664,
       "sensor": "MODIS NRT"
     }
   ]
