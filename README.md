@@ -2,12 +2,13 @@
 
 NASA Space Apps Challenge 2026 – MODIS & VIIRS hot spot harmonization.
 
-Dark Streamlit UI. Primary path:
+**Hosted UI (FastAPI):** Archive mode with **start/end date pickers for 2023–2026**,
+optional **period comparison**, map + activity chart. Bundled regional extracts
+ship under `data/bundled/` (Turkey, Aegean, Central Anatolia, Marmara, California,
+Mediterranean) so the public site works without the multi-GB worldwide dump.
 
-1. **Archive CSV** — drop FIRMS Archive downloads into `data/` (e.g. 2023–2026);
-   exact activity chart + sampled map for the selected region.
-2. **Live compare** — with `FIRMS_MAP_KEY`, compare that archive span to the
-   last 5–10 NRT days (daily averages so the periods stay comparable).
+Optional Streamlit explorer (`streamlit_app.py`) for full-archive + live NRT
+compare when WebSockets are available.
 
 Matched (High Confidence) = within **1 km** and **±6 hours**.
 
@@ -21,20 +22,19 @@ Matched (High Confidence) = within **1 km** and **±6 hours**.
 | **Final Project** | Source + live app (see below) |
 | **NASA Data** | [NASA FIRMS](https://firms.modaps.eosdis.nasa.gov/) (MODIS + VIIRS Archive / NRT) |
 
-**Live site (Cursor Apps):** FastAPI HTML UI at the published `*.apps.grok.bot` slug (no WebSockets). Sample FIRMS CSV loads by default; live NRT needs `FIRMS_MAP_KEY`.
-
-Optional full Streamlit archive explorer: `streamlit run streamlit_app.py` (needs WebSocket-capable host).
+**Live site (Cursor Apps):** FastAPI HTML UI at the published `*.apps.grok.bot` slug (no WebSockets).
+Default mode is **Archive 2023–2026** (date pickers + compare). Live NRT needs
+`FIRMS_MAP_KEY` + `NRT_GATE_PASSWORD`.
 
 Open each link in a private window before submit.
 
 ## Features
 
-- Preset regions (Global, Amazon, Australia, California, Mediterranean,
-  Siberia, Indonesia, Turkey sub-regions) + place name + manual bbox
-- Activity chart above the map (Monthly/Weekly/Daily auto for long spans)
-- Archive vs live NRT comparison (MAP_KEY)
-- Anomaly days (>2× mean activity)
-- Controls at the bottom (no left sidebar)
+- **Archive date range** (2023-01-01 → 2026-11-15) with start/end pickers
+- **Compare two periods** (totals / matched / MODIS-only / VIIRS-only)
+- Bundled regional Parquet extracts for hosted demos; full DuckDB when present
+- Activity chart + Leaflet map (Matched / MODIS-only / VIIRS-only)
+- Optional gated live FIRMS NRT
 
 ## Run locally
 

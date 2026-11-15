@@ -33,7 +33,7 @@
       color: var(--teal);
       margin: 0 0 0.3rem;
     }
-    .lead { color: var(--muted); max-width: 40rem; margin: 0 0 1rem; line-height: 1.45; font-size: 0.95rem; }
+    .lead { color: var(--muted); max-width: 42rem; margin: 0 0 1rem; line-height: 1.45; font-size: 0.95rem; }
     .panel {
       background: var(--panel);
       border: 1px solid var(--line);
@@ -42,14 +42,24 @@
     }
     .row { display: flex; flex-wrap: wrap; gap: 0.65rem 0.85rem; align-items: end; }
     label { display: grid; gap: 0.25rem; font-size: 0.78rem; color: var(--muted); }
-    select, input[type="number"], input[type="password"] {
+    select, input[type="number"], input[type="password"], input[type="date"] {
       background: #0a1016;
       border: 1px solid var(--line);
       color: var(--ink);
       padding: 0.45rem 0.55rem;
       min-width: 9rem;
       font: inherit;
+      color-scheme: dark;
     }
+    .check {
+      display: flex;
+      align-items: center;
+      gap: 0.45rem;
+      font-size: 0.85rem;
+      color: var(--ink);
+      padding-bottom: 0.35rem;
+    }
+    .check input { width: 1rem; height: 1rem; }
     .btn {
       background: var(--teal);
       color: #041016;
@@ -89,43 +99,104 @@
     .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; margin-right: 0.3rem; }
     .foot { margin-top: 1.5rem; color: var(--muted); font-size: 0.75rem; }
     a { color: var(--cyan); }
+    .compare-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 0.5rem;
+    }
+    @media (max-width: 640px) { .compare-grid { grid-template-columns: repeat(2, 1fr); } }
+    .compare-card {
+      background: #0a1016;
+      border: 1px solid var(--line);
+      padding: 0.65rem 0.7rem;
+    }
+    .compare-card .delta { font-size: 0.78rem; color: var(--cyan); margin-top: 0.25rem; }
+    .compare-card .vs { font-size: 0.72rem; color: var(--muted); }
+    .archive-only, .nrt-only { display: none; }
+    body[data-mode="archive"] .archive-only { display: grid; }
+    body[data-mode="nrt"] .nrt-only { display: grid; }
+    body[data-mode="archive"] .archive-block { display: block; }
+    .archive-block { display: none; }
   </style>
 </head>
-<body>
+<body data-mode="{{ form.mode }}">
   <div class="wrap">
     <h1 class="brand">Unified Fire Activity Calendar</h1>
     <p class="lead">
-      Harmonize MODIS and VIIRS hotspots (1&nbsp;km · ±6&nbsp;h). NASA Space Apps 2026 — FIRMS data.
+      Harmonize MODIS and VIIRS hotspots (1&nbsp;km · ±6&nbsp;h). Pick any window in the
+      <strong>2023 → 2026</strong> archive, or compare two periods side by side.
     </p>
 
-    <form class="panel" method="post" action="/run">
+    <form class="panel" method="post" action="/run" id="run-form">
       <input type="hidden" name="csrf_token" value="{{ csrf }}" />
       <div class="row">
         <label>Mode
           <select name="mode" id="mode">
-            <option value="sample" {% if mode == 'sample' %}selected{% endif %}>Sample demo</option>
-            <option value="nrt" {% if mode == 'nrt' %}selected{% endif %} {% if not nrt_available %}disabled{% endif %}>
+            <option value="archive" {% if form.mode == 'archive' %}selected{% endif %} {% if not archive_available %}disabled{% endif %}>
+              Archive 2023–2026{% if not archive_available %} (missing){% endif %}
+            </option>
+            <option value="sample" {% if form.mode == 'sample' %}selected{% endif %}>Sample demo</option>
+            <option value="nrt" {% if form.mode == 'nrt' %}selected{% endif %} {% if not nrt_available %}disabled{% endif %}>
               Live FIRMS NRT{% if not nrt_available %} (not configured){% endif %}
             </option>
           </select>
         </label>
         <label>Region
-          <select name="region">
-            {% for name in presets %}
-            <option value="{{ name }}" {% if name == region %}selected{% endif %}>{{ name }}</option>
+          <select name="region" id="region">
+            {% set region_list = archive_regions if form.mode == 'archive' else all_presets %}
+            {% for name in region_list %}
+            <option value="{{ name }}" {% if name == form.region %}selected{% endif %}>{{ name }}</option>
             {% endfor %}
           </select>
         </label>
-        <label>NRT days
-          <input type="number" name="days" min="1" max="{{ max_days }}" value="{{ days }}" />
+
+        <label class="archive-only">Start date
+          <input type="date" name="start_date" id="start_date"
+                 min="{{ form.archive_min }}" max="{{ form.archive_max }}"
+                 value="{{ form.start_date }}" />
         </label>
-        <label>Access code (live NRT)
+        <label class="archive-only">End date
+          <input type="date" name="end_date" id="end_date"
+                 min="{{ form.archive_min }}" max="{{ form.archive_max }}"
+                 value="{{ form.end_date }}" />
+        </label>
+
+        <label class="nrt-only">NRT days
+          <input type="number" name="days" min="1" max="{{ max_days }}" value="{{ form.days }}" />
+        </label>
+        <label class="nrt-only">Access code (live NRT)
           <input type="password" name="access_code" autocomplete="off" placeholder="required for live" />
         </label>
+
         <button class="btn" type="submit">Run</button>
       </div>
-      <p class="hint">
-        Sample mode is open. Live FIRMS needs the operator access code (not your MAP_KEY) and is rate-limited per network.
+
+      <div class="archive-block" style="margin-top:0.75rem">
+        <div class="row">
+          <label class="check">
+            <input type="checkbox" name="compare" value="1" id="compare"
+                   {% if form.compare == '1' %}checked{% endif %} />
+            Compare with another period
+          </label>
+          <label>Compare start
+            <input type="date" name="compare_start" id="compare_start"
+                   min="{{ form.archive_min }}" max="{{ form.archive_max }}"
+                   value="{{ form.compare_start }}" />
+          </label>
+          <label>Compare end
+            <input type="date" name="compare_end" id="compare_end"
+                   min="{{ form.archive_min }}" max="{{ form.archive_max }}"
+                   value="{{ form.compare_end }}" />
+          </label>
+        </div>
+        <p class="hint">
+          Archive covers <strong>{{ form.archive_min }} → {{ form.archive_max }}</strong>.
+          Choose a primary window, optionally a second window to compare totals / matched / MODIS / VIIRS.
+        </p>
+      </div>
+
+      <p class="hint nrt-hint" id="mode-hint">
+        Archive mode uses the local 2023–2026 FIRMS extracts. Live NRT needs the operator access code.
       </p>
     </form>
 
@@ -136,11 +207,27 @@
     {% if result %}
     <p class="source">{{ result.source_label }} · {{ result.rows }} points</p>
     <div class="stats">
-      <div class="stat"><b>{{ result.summary.get('matched', 0) }}</b><span>Matched</span></div>
-      <div class="stat"><b>{{ result.summary.get('modis_only', 0) }}</b><span>MODIS-only</span></div>
-      <div class="stat"><b>{{ result.summary.get('viirs_only', 0) }}</b><span>VIIRS-only</span></div>
-      <div class="stat"><b>{{ result.summary.get('total', result.rows) }}</b><span>Total</span></div>
+      <div class="stat"><b>{{ result.summary.get('matched', 0) }}</b><span>Matched (map sample)</span></div>
+      <div class="stat"><b>{{ result.summary.get('modis_only', 0) }}</b><span>MODIS-only (sample)</span></div>
+      <div class="stat"><b>{{ result.summary.get('viirs_only', 0) }}</b><span>VIIRS-only (sample)</span></div>
+      <div class="stat"><b>{{ result.summary.get('total', result.rows) }}</b><span>Total in window</span></div>
     </div>
+
+    {% if result.compare %}
+    <h2>Period comparison</h2>
+    <p class="source">Primary vs {{ result.compare.label }}</p>
+    <div class="compare-grid">
+      {% for row in result.compare.rows %}
+      <div class="compare-card">
+        <span class="vs">{{ row.label }}</span>
+        <b style="display:block;font-size:1.15rem;color:var(--teal)">{{ row.primary }}</b>
+        <div class="vs">vs {{ row.comparison }}</div>
+        <div class="delta">{{ row.delta }} ({{ row.pct }})</div>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+
     <div class="legend">
       <span><i class="dot" style="background:#00e5d4"></i>Matched</span>
       <span><i class="dot" style="background:#14919b"></i>MODIS-only</span>
@@ -164,6 +251,39 @@
       · NASA FIRMS
     </p>
   </div>
+
+  <script>
+    (function () {
+      const mode = document.getElementById("mode");
+      const body = document.body;
+      const archiveOpts = {{ archive_regions | tojson }};
+      const allOpts = {{ all_presets | tojson }};
+      const region = document.getElementById("region");
+      const current = {{ form.region | tojson }};
+
+      function fillRegions(list) {
+        region.innerHTML = "";
+        list.forEach((name) => {
+          const opt = document.createElement("option");
+          opt.value = name;
+          opt.textContent = name;
+          if (name === current) opt.selected = true;
+          region.appendChild(opt);
+        });
+        if (![...region.options].some((o) => o.selected) && region.options.length) {
+          region.options[0].selected = true;
+        }
+      }
+
+      function syncMode() {
+        const m = mode.value;
+        body.dataset.mode = m;
+        fillRegions(m === "archive" ? archiveOpts : allOpts);
+      }
+      mode.addEventListener("change", syncMode);
+      syncMode();
+    })();
+  </script>
 
   {% if result %}
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin="" defer></script>
