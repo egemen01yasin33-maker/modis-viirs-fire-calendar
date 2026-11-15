@@ -29,7 +29,6 @@ from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, Response
 from fastapi.templating import Jinja2Templates
 
-from src.analytics import compare_summaries
 from src.archive_csv import ArchiveCsvError
 from src.bundled_archive import (
     ARCHIVE_DATE_MAX,
@@ -67,11 +66,22 @@ _MAP_POINT_CAP = 3000
 
 _CSRF_COOKIE = "fc_csrf"
 
-_IP_HITS: dict[str, list[float]] = defaultdict(list)
-_IP_MAX_PER_HOUR = 3
-_IP_MIN_GAP_SEC = 60.0
-_GLOBAL_HITS: list[float] = []
-_GLOBAL_MAX_PER_HOUR = 40
+# Rate limits use the direct TCP peer only — never X-Forwarded-For (spoofable).
+_NRT_HITS: dict[str, list[float]] = defaultdict(list)
+_NRT_MAX_PER_HOUR = 3
+_NRT_MIN_GAP_SEC = 60.0
+_NRT_GLOBAL_HITS: list[float] = []
+_NRT_GLOBAL_MAX_PER_HOUR = 20
+
+_GATE_FAILS: dict[str, list[float]] = defaultdict(list)
+_GATE_FAIL_MAX = 5
+_GATE_FAIL_WINDOW_SEC = 900.0  # 15 minutes
+
+_ARCHIVE_HITS: dict[str, list[float]] = defaultdict(list)
+_ARCHIVE_MAX_PER_MIN = 12
+_ARCHIVE_MAX_PER_HOUR = 120
+_ARCHIVE_GLOBAL_HITS: list[float] = []
+_ARCHIVE_GLOBAL_MAX_PER_MIN = 60
 
 
 @asynccontextmanager
@@ -101,12 +111,19 @@ def _nrt_configured() -> bool:
 
 
 def _client_ip(request: Request) -> str:
-    forwarded = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
-    if forwarded:
-        return forwarded[:64]
+    """
+    Rate-limit identity = direct connection peer only.
+
+    Public clients can forge X-Forwarded-For / X-Real-IP; those headers are
+    ignored so one password cannot mint unlimited per-IP FIRMS quotas.
+    """
     if request.client and request.client.host:
         return request.client.host[:64]
     return "unknown"
+
+
+def _prune(hits: list[float], now: float, window: float) -> list[float]:
+    return [t for t in hits if now - t < window]
 
 
 def _issue_csrf() -> str:
@@ -124,34 +141,90 @@ def _cookie_secure() -> bool:
     return bool(os.getenv("CURSOR_APP_ID") or os.getenv("VERCEL"))
 
 
+def _public_error(exc: BaseException) -> str:
+    """User-facing message — never raw unexpected exception text."""
+    if isinstance(exc, (FirmsApiError, ArchiveCsvError, ValueError)):
+        text = str(exc).strip()
+        if text and len(text) <= 240 and "\n" not in text:
+            return text
+        if isinstance(exc, FirmsApiError):
+            return "Live FIRMS request could not be completed. Try again later."
+        if isinstance(exc, ArchiveCsvError):
+            return "Archive query failed for this region or date window."
+        return "Invalid request. Check dates, region, or coordinates."
+    return "Something went wrong. Reload and try again."
+
+
 def _nrt_rate_ok(ip: str) -> tuple[bool, str]:
     now = time.monotonic()
-    hits = [t for t in _IP_HITS[ip] if now - t < 3600]
-    _IP_HITS[ip] = hits
-    if len(hits) >= _IP_MAX_PER_HOUR:
+    hits = _prune(_NRT_HITS[ip], now, 3600)
+    _NRT_HITS[ip] = hits
+    if len(hits) >= _NRT_MAX_PER_HOUR:
         return False, "Live FIRMS limit for this network reached. Try again later."
-    if hits and (now - hits[-1]) < _IP_MIN_GAP_SEC:
-        wait = int(_IP_MIN_GAP_SEC - (now - hits[-1])) + 1
+    if hits and (now - hits[-1]) < _NRT_MIN_GAP_SEC:
+        wait = int(_NRT_MIN_GAP_SEC - (now - hits[-1])) + 1
         return False, f"Please wait {wait}s before another live FIRMS request."
 
-    global_hits = [t for t in _GLOBAL_HITS if now - t < 3600]
-    _GLOBAL_HITS[:] = global_hits
-    if len(global_hits) >= _GLOBAL_MAX_PER_HOUR:
+    global_hits = _prune(_NRT_GLOBAL_HITS, now, 3600)
+    _NRT_GLOBAL_HITS[:] = global_hits
+    if len(global_hits) >= _NRT_GLOBAL_MAX_PER_HOUR:
         return False, "Live FIRMS is busy right now. Use archive mode or retry later."
     return True, ""
 
 
 def _record_nrt(ip: str) -> None:
     now = time.monotonic()
-    _IP_HITS[ip].append(now)
-    _GLOBAL_HITS.append(now)
+    _NRT_HITS[ip].append(now)
+    _NRT_GLOBAL_HITS.append(now)
+
+
+def _gate_fail_ok(ip: str) -> tuple[bool, str]:
+    now = time.monotonic()
+    fails = _prune(_GATE_FAILS[ip], now, _GATE_FAIL_WINDOW_SEC)
+    _GATE_FAILS[ip] = fails
+    if len(fails) >= _GATE_FAIL_MAX:
+        return False, "Too many invalid access codes. Try again later."
+    return True, ""
+
+
+def _record_gate_fail(ip: str) -> None:
+    _GATE_FAILS[ip].append(time.monotonic())
 
 
 def _gate_ok(submitted: str) -> bool:
     expected = _gate_password()
     if not expected:
         return False
-    return hmac.compare_digest(submitted.strip(), expected)
+    # Constant-time compare; empty / short submissions still go through digest path
+    got = (submitted or "").strip()
+    if len(got) != len(expected):
+        # Still compare against expected to keep timing closer
+        hmac.compare_digest(expected, expected)
+        return False
+    return hmac.compare_digest(got, expected)
+
+
+def _archive_rate_ok(ip: str) -> tuple[bool, str]:
+    now = time.monotonic()
+    hits = _prune(_ARCHIVE_HITS[ip], now, 3600)
+    _ARCHIVE_HITS[ip] = hits
+    recent = [t for t in hits if now - t < 60]
+    if len(recent) >= _ARCHIVE_MAX_PER_MIN:
+        return False, "Too many archive requests. Wait a moment and try again."
+    if len(hits) >= _ARCHIVE_MAX_PER_HOUR:
+        return False, "Archive request limit reached for this network. Try later."
+
+    global_hits = _prune(_ARCHIVE_GLOBAL_HITS, now, 60)
+    _ARCHIVE_GLOBAL_HITS[:] = global_hits
+    if len(global_hits) >= _ARCHIVE_GLOBAL_MAX_PER_MIN:
+        return False, "Server is busy. Please retry shortly."
+    return True, ""
+
+
+def _record_archive(ip: str) -> None:
+    now = time.monotonic()
+    _ARCHIVE_HITS[ip].append(now)
+    _ARCHIVE_GLOBAL_HITS.append(now)
 
 
 def _parse_date(value: str | date | None, fallback: date) -> date:
@@ -284,8 +357,13 @@ def _fmt_pct(pct: float | None) -> str:
     return f"{sign}{pct:.1f}%"
 
 
-def _comparison_rows(primary: pd.DataFrame, comparison: pd.DataFrame) -> list[dict]:
-    rows = compare_summaries(primary, comparison)
+def _comparison_rows_from_summaries(
+    primary_summary: dict,
+    comparison_summary: dict,
+) -> list[dict]:
+    """Side-by-side metrics from cached archive summaries (no raw frames)."""
+    from src.analytics import pct_change
+
     labels = {
         "total": "Total",
         "matched": "Matched",
@@ -294,45 +372,23 @@ def _comparison_rows(primary: pd.DataFrame, comparison: pd.DataFrame) -> list[di
     }
     out = []
     for key, label in labels.items():
-        item = rows[key]
+        # Prefer exact window total; sample categories otherwise
+        if key == "total":
+            p = int(primary_summary.get("total") or 0)
+            c = int(comparison_summary.get("total") or 0)
+        else:
+            p = int(primary_summary.get(key) or 0)
+            c = int(comparison_summary.get(key) or 0)
         out.append(
             {
                 "key": key,
                 "label": label,
-                "primary": int(item["primary"]),
-                "comparison": int(item["comparison"]),
-                "delta": int(item["delta"]),
-                "pct": _fmt_pct(item["pct"]),  # type: ignore[arg-type]
+                "primary": p,
+                "comparison": c,
+                "delta": p - c,
+                "pct": _fmt_pct(pct_change(p, c)),
             }
         )
-    return out
-
-
-def _overlay_exact_totals(
-    rows: list[dict],
-    primary_summary: dict,
-    comparison_summary: dict,
-) -> list[dict]:
-    """Replace Total with exact daily-aggregate window counts when available."""
-    from src.analytics import pct_change
-
-    p = int(primary_summary.get("total") or 0)
-    c = int(comparison_summary.get("total") or 0)
-    out = []
-    for row in rows:
-        if row.get("key") == "total":
-            delta = p - c
-            out.append(
-                {
-                    **row,
-                    "primary": p,
-                    "comparison": c,
-                    "delta": delta,
-                    "pct": _fmt_pct(pct_change(p, c)),
-                }
-            )
-        else:
-            out.append(row)
     return out
 
 
@@ -405,14 +461,19 @@ def _parse_bbox(
     return region, PRESET_REGIONS[region]
 
 
-def _archive_result(
+@lru_cache(maxsize=64)
+def _archive_display_cached(
     region_label: str,
-    start: date,
-    end: date,
-    bbox: tuple[float, float, float, float],
-) -> dict:
-    min_lon, min_lat, max_lon, max_lat = bbox
-    # Bundled extracts are keyed by preset name; custom boxes pick a covering file
+    start_iso: str,
+    end_iso: str,
+    min_lon: float,
+    min_lat: float,
+    max_lon: float,
+    max_lat: float,
+) -> str:
+    """Cached JSON for an archive window (no DataFrames — safe to reuse)."""
+    start = date.fromisoformat(start_iso)
+    end = date.fromisoformat(end_iso)
     if region_label in PRESET_REGIONS and region_label != "Custom coordinates":
         bundle_key = region_label
     else:
@@ -436,24 +497,64 @@ def _archive_result(
     if daily is not None and not daily.empty and "frp_sum" in daily.columns:
         frp_total = float(daily["frp_sum"].sum())
     elif not payload["raw"].empty and "frp" in payload["raw"].columns:
-        frp_total = float(pd.to_numeric(payload["raw"]["frp"], errors="coerce").fillna(0).sum())
-    result["summary"] = {
+        frp_total = float(
+            pd.to_numeric(payload["raw"]["frp"], errors="coerce").fillna(0).sum()
+        )
+    summary = {
         **result["summary"],
         "total": total,
         "frp_sum": round(frp_total, 1),
     }
-    result["rows"] = total
-    result["bbox"] = [min_lon, min_lat, max_lon, max_lat]
-    result["map_bounds"] = [[min_lat, min_lon], [max_lat, max_lon]]
-    # Prefer bbox center for empty samples so the map stays on the selected area
-    if result["rows"] == 0 or payload["raw"].empty:
-        result["map_center"] = [(min_lat + max_lat) / 2.0, (min_lon + max_lon) / 2.0]
-        result["map_zoom"] = 6
-    result["source_label"] = (
-        f"Archive · {region_label} · {start.isoformat()} → {end.isoformat()} "
-        f"({payload.get('source', 'archive')})"
+    map_center = result["map_center"]
+    map_zoom = result["map_zoom"]
+    if total == 0 or payload["raw"].empty:
+        map_center = [(min_lat + max_lat) / 2.0, (min_lon + max_lon) / 2.0]
+        map_zoom = 6
+    # Drop non-JSON harm frame before caching
+    result.pop("harm", None)
+    display = {
+        "summary": summary,
+        "rows": total,
+        "points_json": result["points_json"],
+        "series_json": result["series_json"],
+        "map_center": map_center,
+        "map_zoom": map_zoom,
+        "bbox": [min_lon, min_lat, max_lon, max_lat],
+        "map_bounds": [[min_lat, min_lon], [max_lat, max_lon]],
+        "source_label": (
+            f"Archive · {region_label} · {start_iso} → {end_iso} "
+            f"({payload.get('source', 'archive')})"
+        ),
+        "period_label": f"{start_iso} → {end_iso}",
+    }
+    return json.dumps(display, separators=(",", ":"))
+
+
+def _archive_result(
+    region_label: str,
+    start: date,
+    end: date,
+    bbox: tuple[float, float, float, float],
+) -> dict:
+    min_lon, min_lat, max_lon, max_lat = (
+        round(float(bbox[0]), 4),
+        round(float(bbox[1]), 4),
+        round(float(bbox[2]), 4),
+        round(float(bbox[3]), 4),
     )
-    result["period_label"] = f"{start.isoformat()} → {end.isoformat()}"
+    raw = _archive_display_cached(
+        region_label,
+        start.isoformat(),
+        end.isoformat(),
+        min_lon,
+        min_lat,
+        max_lon,
+        max_lat,
+    )
+    result = json.loads(raw)
+    # Placeholder so compare path can use summary-only deltas
+    result["harm"] = pd.DataFrame()
+    result["_summary_only"] = True
     return result
 
 
@@ -598,8 +699,7 @@ def _run_with_form(form: dict) -> tuple[dict | None, str | None, dict]:
             form["compare_start"] = cs.isoformat()
             form["compare_end"] = ce.isoformat()
             other = _archive_result(label, cs, ce, bbox)
-            rows = _comparison_rows(result["harm"], other["harm"])
-            rows = _overlay_exact_totals(rows, result["summary"], other["summary"])
+            rows = _comparison_rows_from_summaries(result["summary"], other["summary"])
             result["compare"] = {
                 "label": other["period_label"],
                 "rows": rows,
@@ -607,10 +707,11 @@ def _run_with_form(form: dict) -> tuple[dict | None, str | None, dict]:
                 "summary": other["summary"],
             }
         result.pop("harm", None)
+        result.pop("_summary_only", None)
     except (FirmsApiError, ArchiveCsvError, ValueError) as exc:
-        error = str(exc)
+        error = _public_error(exc)
     except Exception as exc:  # noqa: BLE001
-        error = f"Unexpected error: {exc}"
+        error = _public_error(exc)
     return result, error, form
 
 
@@ -619,6 +720,18 @@ def _run_with_form(form: dict) -> tuple[dict | None, str | None, dict]:
 async def home(request: Request) -> Response:
     csrf = request.cookies.get(_CSRF_COOKIE) or _issue_csrf()
     form = _default_form()
+    ip = _client_ip(request)
+    ok, reason = _archive_rate_ok(ip)
+    if not ok:
+        ctx = _page_context(
+            request,
+            result=cached_sample_result() if SAMPLE_CSV.is_file() else None,
+            error=reason,
+            form=form,
+            csrf=csrf,
+        )
+        return _html_response(request, ctx, csrf=csrf)
+    _record_archive(ip)
     result, error, form = _run_with_form(form)
     if error and result is None:
         try:
@@ -677,6 +790,7 @@ async def run(
     # Archive/sample are read-only public queries — soft CSRF (tunnel/cookie quirks).
     # Live NRT still requires a valid CSRF + access code.
     csrf_valid = _csrf_ok(request, csrf_token)
+    ip = _client_ip(request)
     if want_nrt and _nrt_configured() and access_code:
         if not csrf_valid:
             error = "Invalid or missing form token. Reload the page and try again."
@@ -687,9 +801,12 @@ async def run(
         error = None
         result = None
         try:
+            gate_ok, gate_reason = _gate_fail_ok(ip)
+            if not gate_ok:
+                raise FirmsApiError(gate_reason)
             if not _gate_ok(access_code):
+                _record_gate_fail(ip)
                 raise FirmsApiError("Invalid access code for live FIRMS.")
-            ip = _client_ip(request)
             ok, reason = _nrt_rate_ok(ip)
             if not ok:
                 raise FirmsApiError(reason)
@@ -707,6 +824,7 @@ async def run(
             form["max_lat"] = str(bbox[3])
             nrt_end = date.today()
             nrt_start = nrt_end - timedelta(days=days - 1)
+            # Record quota before the outbound call so aborts still count
             _record_nrt(ip)
             raw = fetch_firms_area(
                 _firms_key(),
@@ -719,7 +837,9 @@ async def run(
             result["bbox"] = list(bbox)
             result["map_bounds"] = [[bbox[1], bbox[0]], [bbox[3], bbox[2]]]
             if not raw.empty and "frp" in raw.columns:
-                frp_total = float(pd.to_numeric(raw["frp"], errors="coerce").fillna(0).sum())
+                frp_total = float(
+                    pd.to_numeric(raw["frp"], errors="coerce").fillna(0).sum()
+                )
                 result["summary"] = {
                     **result["summary"],
                     "frp_sum": round(frp_total, 1),
@@ -732,14 +852,25 @@ async def run(
             form["mode"] = "nrt"
             form["mode_label"] = "Live FIRMS NRT (auto from dates)"
         except (FirmsApiError, ValueError) as exc:
-            error = str(exc)
+            error = _public_error(exc)
             result, _, form = _run_with_form(form)
         except Exception as exc:  # noqa: BLE001
-            error = f"Unexpected error: {exc}"
+            error = _public_error(exc)
     else:
-        if not csrf_valid:
-            csrf = _issue_csrf()
-        result, error, form = _run_with_form(form)
+        ok, reason = _archive_rate_ok(ip)
+        if not ok:
+            error = reason
+            result = None
+            try:
+                result = cached_sample_result()
+            except Exception:  # noqa: BLE001
+                pass
+            form["mode"] = "archive"
+        else:
+            _record_archive(ip)
+            if not csrf_valid:
+                csrf = _issue_csrf()
+            result, error, form = _run_with_form(form)
 
     csrf = _issue_csrf()
     ctx = _page_context(
