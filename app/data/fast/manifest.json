@@ -1,0 +1,89 @@
+{
+  "regions": {
+    "Turkey": {
+      "key": "turkey",
+      "daily": "data/fast/turkey_daily.json",
+      "points": "data/fast/turkey_points.json",
+      "n_daily": 1375,
+      "n_points": 15900
+    },
+    "Aegean": {
+      "key": "aegean",
+      "daily": "data/fast/aegean_daily.json",
+      "points": "data/fast/aegean_points.json",
+      "n_daily": 1210,
+      "n_points": 12444
+    },
+    "Central Anatolia": {
+      "key": "central_anatolia",
+      "daily": "data/fast/central_anatolia_daily.json",
+      "points": "data/fast/central_anatolia_points.json",
+      "n_daily": 1147,
+      "n_points": 11127
+    },
+    "Marmara": {
+      "key": "marmara",
+      "daily": "data/fast/marmara_daily.json",
+      "points": "data/fast/marmara_points.json",
+      "n_daily": 1144,
+      "n_points": 11229
+    },
+    "Mediterranean": {
+      "key": "mediterranean",
+      "daily": "data/fast/mediterranean_daily.json",
+      "points": "data/fast/mediterranean_points.json",
+      "n_daily": 1384,
+      "n_points": 16100
+    },
+    "California": {
+      "key": "california",
+      "daily": "data/fast/california_daily.json",
+      "points": "data/fast/california_points.json",
+      "n_daily": 1360,
+      "n_points": 15784
+    }
+  },
+  "default": {
+    "region": "Turkey",
+    "start": "2024-06-01",
+    "end": "2024-08-31"
+  },
+  "presets": {
+    "Turkey": [
+      25.5,
+      35.8,
+      45.0,
+      42.3
+    ],
+    "Aegean": [
+      26.0,
+      36.5,
+      30.0,
+      40.0
+    ],
+    "Central Anatolia": [
+      31.0,
+      37.5,
+      36.0,
+      41.0
+    ],
+    "Marmara": [
+      26.0,
+      39.5,
+      30.5,
+      41.8
+    ],
+    "Mediterranean": [
+      -6.0,
+      30.0,
+      37.0,
+      46.0
+    ],
+    "California": [
+      -124.5,
+      32.5,
+      -114.0,
+      42.0
+    ]
+  }
+}

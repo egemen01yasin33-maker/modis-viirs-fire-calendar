@@ -1,0 +1,53 @@
+{
+  "epoch": "2023-01-01",
+  "regions": {
+    "turkey": {
+      "daily": "turkey.daily.json",
+      "points": "turkey.points.bin",
+      "n": 267248,
+      "daily_n": 1375,
+      "daily_bytes": 71426,
+      "points_bytes": 4008732
+    },
+    "aegean": {
+      "daily": "aegean.daily.json",
+      "points": "aegean.points.bin",
+      "n": 22382,
+      "daily_n": 1210,
+      "daily_bytes": 58374,
+      "points_bytes": 335742
+    },
+    "central_anatolia": {
+      "daily": "central_anatolia.daily.json",
+      "points": "central_anatolia.points.bin",
+      "n": 19717,
+      "daily_n": 1147,
+      "daily_bytes": 55140,
+      "points_bytes": 295767
+    },
+    "marmara": {
+      "daily": "marmara.daily.json",
+      "points": "marmara.points.bin",
+      "n": 23966,
+      "daily_n": 1144,
+      "daily_bytes": 55054,
+      "points_bytes": 359502
+    },
+    "mediterranean": {
+      "daily": "mediterranean.daily.json",
+      "points": "mediterranean.points.bin",
+      "n": 120000,
+      "daily_n": 1384,
+      "daily_bytes": 74407,
+      "points_bytes": 1800012
+    },
+    "california": {
+      "daily": "california.daily.json",
+      "points": "california.points.bin",
+      "n": 176828,
+      "daily_n": 1360,
+      "daily_bytes": 69538,
+      "points_bytes": 2652432
+    }
+  }
+}

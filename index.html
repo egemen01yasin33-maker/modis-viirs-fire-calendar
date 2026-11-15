@@ -78,104 +78,99 @@
     .pill {
       border: 1px solid var(--line);
       background: rgba(0, 229, 212, 0.06);
-      color: var(--cyan);
+      color: var(--ink);
       padding: 0.35rem 0.7rem;
       font-size: 0.82rem;
-      font-weight: 500;
+      border-radius: 999px;
     }
     .grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      grid-template-columns: repeat(3, minmax(0, 1fr));
       gap: 0.75rem;
     }
+    @media (max-width: 720px) { .grid { grid-template-columns: 1fr; } }
     .card {
       background: var(--panel);
       border: 1px solid var(--line);
-      padding: 0.95rem 1rem;
+      padding: 1rem 1.05rem;
     }
     .stat-val {
       font-family: Syne, sans-serif;
-      font-size: 1.55rem;
+      font-size: 1.7rem;
       font-weight: 800;
       color: var(--teal);
     }
-    .stat-lbl { font-size: 0.82rem; color: var(--muted); margin-top: 0.2rem; }
+    .stat-lbl { color: var(--muted); font-size: 0.85rem; margin-top: 0.2rem; }
     .two {
       display: grid;
-      grid-template-columns: 1.35fr 1fr;
+      grid-template-columns: 1.2fr 0.8fr;
       gap: 1rem;
+      align-items: start;
     }
     @media (max-width: 800px) { .two { grid-template-columns: 1fr; } }
     ul { margin: 0.4rem 0 0; padding-left: 1.15rem; }
-    .rule {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: center;
-      gap: 0.75rem;
-    }
-    .op {
-      font-family: Syne, sans-serif;
-      font-weight: 800;
-      color: var(--amber);
-    }
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 0.95rem;
-    }
-    th, td {
-      text-align: left;
-      padding: 0.55rem 0.65rem;
-      border-bottom: 1px solid var(--line);
-      vertical-align: top;
-    }
-    th { color: var(--cyan); font-weight: 600; }
-    td:first-child { color: var(--ink); font-weight: 600; white-space: nowrap; }
-    .tiny { font-size: 0.85rem; color: var(--muted); }
     .page {
-      justify-self: end;
-      font-size: 0.78rem;
-      letter-spacing: 0.12em;
       color: var(--muted);
+      font-size: 0.78rem;
+      letter-spacing: 0.08em;
       margin-top: 0.4rem;
     }
-    .footer {
+    .nav {
       display: flex;
+      gap: 0.55rem;
+      justify-content: center;
       align-items: center;
-      justify-content: space-between;
-      gap: 1rem;
-      padding: 0.75rem 1.2rem;
+      padding: 0.75rem 1rem 1.1rem;
       border-top: 1px solid var(--line);
-      background: rgba(7, 11, 16, 0.92);
+      background: rgba(7, 11, 16, 0.85);
+      backdrop-filter: blur(8px);
     }
-    .dots { display: flex; gap: 0.4rem; }
-    .dot {
-      width: 8px; height: 8px; border-radius: 50%;
-      border: 0; padding: 0; cursor: pointer;
-      background: #33414c;
+    .dots { display: flex; gap: 0.35rem; flex-wrap: wrap; justify-content: center; }
+    .dot-btn {
+      width: 9px; height: 9px; border-radius: 50%;
+      border: 0; background: #2a3844; cursor: pointer; padding: 0;
     }
-    .dot.on { background: var(--teal); }
-    .hint { color: var(--muted); font-size: 0.78rem; }
-    .nav { display: flex; gap: 0.5rem; }
+    .dot-btn.on { background: var(--teal); }
     .ctrl {
-      background: var(--panel);
+      background: transparent;
       border: 1px solid var(--line);
       color: var(--ink);
-      padding: 0.45rem 0.85rem;
+      padding: 0.4rem 0.75rem;
       cursor: pointer;
       font: inherit;
     }
-    .ctrl:disabled { opacity: 0.35; cursor: default; }
-    code { font-size: 0.88em; color: var(--cyan); }
-    strong { color: var(--ink); }
+    .ctrl:hover { border-color: var(--teal); color: var(--teal); }
+    table { width: 100%; border-collapse: collapse; font-size: 0.95rem; }
+    td, th {
+      border-bottom: 1px solid var(--line);
+      padding: 0.55rem 0.4rem;
+      text-align: left;
+      color: var(--muted);
+    }
+    th { color: var(--cyan); font-weight: 600; }
+    code { color: var(--amber); font-size: 0.9em; }
     a { color: var(--cyan); }
+    .tiny { font-size: 0.82rem; color: var(--muted); }
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 0.55rem;
+    }
+    @media (max-width: 800px) { .flow { grid-template-columns: 1fr 1fr; } }
+    .flow .card { text-align: center; }
+    .flow .n {
+      font-family: Syne, sans-serif;
+      color: var(--teal);
+      font-weight: 800;
+      font-size: 1.25rem;
+    }
   </style>
 </head>
 <body>
   <div class="deck">
     <main id="slides">
 
-      <!-- 1 / 7 -->
+      <!-- 1 -->
       <section class="slide active" data-i="0">
         <div class="kicker">NASA Space Apps Challenge 2026</div>
         <div class="brand">Unified Fire Activity Calendar</div>
@@ -194,10 +189,10 @@
           <div class="card"><div class="stat-val">±6 h</div><div class="stat-lbl">Time window</div></div>
           <div class="card"><div class="stat-val">3 yrs+</div><div class="stat-lbl">Archive coverage</div></div>
         </div>
-        <div class="page">01 / 07</div>
+        <div class="page">01 / 10</div>
       </section>
 
-      <!-- 2 / 7 -->
+      <!-- 2 -->
       <section class="slide" data-i="1">
         <div class="kicker">Problem</div>
         <h2>Same fire, two sensors, fragmented truth</h2>
@@ -208,6 +203,7 @@
               <li>Double-counting or missed co-detections</li>
               <li>No shared answer to “how intense was this week?”</li>
               <li>Counts and energy (FRP) rarely share one screen</li>
+              <li>Managers jump between portals instead of one calendar</li>
             </ul>
           </div>
           <div class="card">
@@ -215,91 +211,153 @@
             <p>Fire managers, disaster coordinators, researchers, and local teams using open NASA FIRMS data.</p>
           </div>
         </div>
-        <div class="page">02 / 07</div>
+        <div class="page">02 / 10</div>
       </section>
 
-      <!-- 3 / 7 -->
+      <!-- 3 -->
       <section class="slide" data-i="2">
-        <div class="kicker">Solution + rule</div>
-        <h2>One map · one calendar · clear thresholds</h2>
-        <p class="lead">Pick a region and date window. Match MODIS↔VIIRS in space–time. Read points, activity, and FRP together.</p>
-        <div class="rule">
-          <div class="card"><div class="stat-val">≤ 1 km</div><div class="stat-lbl">Haversine distance</div></div>
-          <div class="op">AND</div>
-          <div class="card"><div class="stat-val">≤ 6 h</div><div class="stat-lbl">|Δ acquisition time|</div></div>
-        </div>
+        <div class="kicker">Solution</div>
+        <h2>One calendar for activity and power</h2>
         <div class="grid">
-          <div class="card"><h3>Matched</h3><p>Both conditions → <strong style="color:var(--teal)">Matched (High Confidence)</strong>.</p></div>
-          <div class="card"><h3>Point map</h3><p>Every detection as a colored point — Matched · MODIS-only · VIIRS-only.</p></div>
-          <div class="card"><h3>FRP</h3><p>Fire Radiative Power (MW) on a dual-axis chart and in point popups.</p></div>
+          <div class="card">
+            <h3>Harmonize</h3>
+            <p>Co-locate MODIS &amp; VIIRS within 1&nbsp;km and ±6&nbsp;hours into Matched / MODIS-only / VIIRS-only classes.</p>
+          </div>
+          <div class="card">
+            <h3>Visualize</h3>
+            <p>Point map + dual-axis chart: hotspot counts and Fire Radiative Power (FRP) together.</p>
+          </div>
+          <div class="card">
+            <h3>Compare</h3>
+            <p>Pick any 2023–2026 window and compare to another period in one click.</p>
+          </div>
         </div>
-        <div class="page">03 / 07</div>
+        <p class="lead" style="margin-top:0.4rem">Regions first (Turkey, Aegean, Mediterranean, California…) with custom coordinates when needed.</p>
+        <div class="page">03 / 10</div>
       </section>
 
-      <!-- 4 / 7 -->
+      <!-- 4 -->
       <section class="slide" data-i="3">
-        <div class="kicker">Product</div>
-        <h2>What judges can click today</h2>
-        <table>
-          <thead><tr><th>Feature</th><th>What it shows</th></tr></thead>
-          <tbody>
-            <tr><td>Point map</td><td>Leaflet dots sized by FRP — click for category, FRP, coordinates</td></tr>
-            <tr><td>Archive dates</td><td>2023-01-01 → 2026-11-15 with year chips and period compare</td></tr>
-            <tr><td>Regions</td><td>Turkey, Aegean, Mediterranean, California, Amazon, Global…</td></tr>
-            <tr><td>Custom bbox</td><td>West / South / East / North coordinates</td></tr>
-            <tr><td>FRP chart</td><td>Hotspot counts + daily FRP (MW) on one dual-axis plot</td></tr>
-            <tr><td>Live NRT</td><td>Optional gated FIRMS NRT when dates are recent</td></tr>
-          </tbody>
-        </table>
-        <div class="page">04 / 07</div>
-      </section>
-
-      <!-- 5 / 7 -->
-      <section class="slide" data-i="4">
-        <div class="kicker">Demo evidence</div>
-        <h2>Turkey · July 2024 (archive)</h2>
-        <p class="tiny">Source: NASA FIRMS MODIS + VIIRS archive · FastAPI demo smoke test</p>
-        <div class="grid">
-          <div class="card"><div class="stat-val">~12k</div><div class="stat-lbl">Hotspots in window</div></div>
-          <div class="card"><div class="stat-val">Point map</div><div class="stat-lbl">Up to 3,000 plotted dots</div></div>
-          <div class="card"><div class="stat-val">FRP</div><div class="stat-lbl">Daily MW on chart + popup</div></div>
-          <div class="card"><div class="stat-val">Compare</div><div class="stat-lbl">vs July 2023 side-by-side</div></div>
-        </div>
-        <p class="lead" style="margin-top:0.4rem">Pick <strong>2024</strong> → <strong>Turkey</strong> → Run. Zoom the point cloud; open a dot for FRP.</p>
-        <div class="page">05 / 07</div>
-      </section>
-
-      <!-- 6 / 7 -->
-      <section class="slide" data-i="5">
-        <div class="kicker">Architecture + impact</div>
-        <h2>Fast to open · exact to count</h2>
-        <div class="grid">
-          <div class="card"><h3>Ingest</h3><p>FIRMS CSV → Parquet / DuckDB (+ bundled regional extracts for hosting)</p></div>
-          <div class="card"><h3>Compute</h3><p>1 km · ±6 h match · daily totals · FRP sums</p></div>
-          <div class="card"><h3>UI</h3><p>FastAPI + Leaflet point map + Chart.js (no WebSockets required)</p></div>
-        </div>
+        <div class="kicker">Data</div>
+        <h2>NASA FIRMS, made shippable</h2>
         <div class="two">
-          <div class="card">
-            <h3>In the field</h3>
-            <p>See fires as points on one map instead of stitching two satellite CSVs by hand.</p>
+          <div>
+            <table>
+              <tr><th>Source</th><th>Role</th></tr>
+              <tr><td>MODIS (Terra/Aqua)</td><td>1&nbsp;km thermal hotspots</td></tr>
+              <tr><td>VIIRS (NOAA-20/21)</td><td>375&nbsp;m thermal hotspots</td></tr>
+              <tr><td>FRP</td><td>Fire Radiative Power (MW)</td></tr>
+              <tr><td>Archive extracts</td><td>2023 → 2026 regional Parquet</td></tr>
+            </table>
           </div>
           <div class="card">
-            <h3>In analysis</h3>
-            <p>Compare seasons, read FRP intensity, keep open thresholds for auditability.</p>
+            <h3>Why extracts?</h3>
+            <p>Worldwide dumps are multi-GB. Compact regional files keep the live demo fast while staying faithful to FIRMS fields.</p>
           </div>
         </div>
-        <div class="pills">
-          <span class="pill">Python</span>
-          <span class="pill">FastAPI</span>
-          <span class="pill">DuckDB</span>
-          <span class="pill">Leaflet</span>
-          <span class="pill">NASA FIRMS</span>
-        </div>
-        <div class="page">06 / 07</div>
+        <div class="page">04 / 10</div>
       </section>
 
-      <!-- 7 / 7 -->
+      <!-- 5 -->
+      <section class="slide" data-i="4">
+        <div class="kicker">Method</div>
+        <h2>From detections to a single story</h2>
+        <div class="flow">
+          <div class="card"><div class="n">1</div><p>Ingest MODIS + VIIRS for the bbox &amp; dates</p></div>
+          <div class="card"><div class="n">2</div><p>Match within 1&nbsp;km · ±6&nbsp;h</p></div>
+          <div class="card"><div class="n">3</div><p>Aggregate daily counts + FRP</p></div>
+          <div class="card"><div class="n">4</div><p>Paint FRP-scaled points on the map</p></div>
+        </div>
+        <div class="card" style="margin-top:0.4rem">
+          <h3>Map sampling</h3>
+          <p>For dense seasons we keep an FRP-priority monthly sample so the map stays readable and loads in milliseconds — without erasing regional signal.</p>
+        </div>
+        <div class="page">05 / 10</div>
+      </section>
+
+      <!-- 6 -->
+      <section class="slide" data-i="5">
+        <div class="kicker">Product walkthrough</div>
+        <h2>What the live app shows</h2>
+        <div class="grid">
+          <div class="card">
+            <h3>Controls</h3>
+            <p>Year chips, custom dates, region presets, custom W/S/E/N coordinates, period compare.</p>
+          </div>
+          <div class="card">
+            <h3>Chart panel</h3>
+            <p>Toggle Matched / MODIS / VIIRS / FRP, 3–7 day smoothing, linear or log FRP scale, optional fill.</p>
+          </div>
+          <div class="card">
+            <h3>Map</h3>
+            <p>Small FRP-scaled dots, chunked paint for speed, click a point for FRP and sensor.</p>
+          </div>
+        </div>
+        <p class="tiny">Try Turkey → Summer chip → watch chart + map update together.</p>
+        <div class="page">06 / 10</div>
+      </section>
+
+      <!-- 7 -->
       <section class="slide" data-i="6">
+        <div class="kicker">Impact</div>
+        <h2>Faster answers for real decisions</h2>
+        <div class="two">
+          <ul>
+            <li>See whether a season is worse than last year in seconds</li>
+            <li>Separate sensor bias from true activity growth</li>
+            <li>Read intensity (FRP), not only detection counts</li>
+            <li>Share one public link for judges, mentors, and partners</li>
+          </ul>
+          <div class="card">
+            <h3>Space Apps fit</h3>
+            <p>Uses open NASA Earth data to turn multi-sensor fire observations into an actionable calendar for communities at risk.</p>
+          </div>
+        </div>
+        <div class="page">07 / 10</div>
+      </section>
+
+      <!-- 8 -->
+      <section class="slide" data-i="7">
+        <div class="kicker">Architecture</div>
+        <h2>Built to stay online</h2>
+        <div class="grid">
+          <div class="card">
+            <h3>Live static app</h3>
+            <p>GitHub Pages + precomputed daily series &amp; point samples — no WebSocket host required.</p>
+          </div>
+          <div class="card">
+            <h3>Full stack path</h3>
+            <p>FastAPI + DuckDB/Parquet for local or Cursor-hosted runs with the same UI language.</p>
+          </div>
+          <div class="card">
+            <h3>Pitch deck</h3>
+            <p>This 10-slide English walkthrough, linked next to the live map.</p>
+          </div>
+        </div>
+        <div class="page">08 / 10</div>
+      </section>
+
+      <!-- 9 -->
+      <section class="slide" data-i="8">
+        <div class="kicker">Roadmap</div>
+        <h2>What comes next</h2>
+        <div class="two">
+          <ul>
+            <li>Optional gated live FIRMS NRT for the last 1–10 days</li>
+            <li>More regional extracts (Amazon, Indonesia, Siberia…)</li>
+            <li>Export CSV / GeoJSON for responders</li>
+            <li>Mobile-first alerts when FRP spikes vs last year</li>
+          </ul>
+          <div class="card">
+            <h3>Open science</h3>
+            <p>Code and extracts stay on GitHub so other teams can fork the calendar for their basin.</p>
+          </div>
+        </div>
+        <div class="page">09 / 10</div>
+      </section>
+
+      <!-- 10 -->
+      <section class="slide" data-i="9">
         <div class="kicker">Close</div>
         <h1>Ready for a live walkthrough</h1>
         <p class="lead">Open the app → Turkey → year chip → watch hotspot points and FRP update together.</p>
@@ -307,77 +365,60 @@
           <div class="card">
             <h3>Links</h3>
             <ul>
+              <li>Live map: <a href="./app/">…/modis-viirs-fire-calendar/app/</a></li>
               <li>Source: <code>github.com/egemen01yasin33-maker/modis-viirs-fire-calendar</code></li>
               <li>Pitch deck: this page (← → / Space · F fullscreen)</li>
-              <li>Live app: <a href="./app/">egemen01yasin33-maker.github.io/…/app/</a></li>
             </ul>
           </div>
           <div class="card">
             <h3>Unified Fire Activity Calendar</h3>
             <p>NASA Space Apps Challenge 2026 · MODIS &amp; VIIRS hotspot harmonization</p>
-            <p class="tiny">Data: NASA FIRMS Archive &amp; NRT</p>
+            <p class="tiny">Data: NASA FIRMS Archive</p>
           </div>
         </div>
         <div class="pills">
           <span class="pill">Thank you</span>
           <span class="pill">Questions?</span>
+          <a class="pill" href="./app/" style="text-decoration:none;border-color:var(--teal);color:var(--teal)">Launch app</a>
         </div>
-        <div class="page">07 / 07</div>
+        <div class="page">10 / 10</div>
       </section>
-
     </main>
 
-    <footer class="footer">
-      <div class="dots" id="dots" aria-label="Slide picker"></div>
-      <div class="hint">← → or Space · F fullscreen · 7 slides · English</div>
-      <div class="nav">
-        <button class="ctrl" id="prev" type="button">Prev</button>
-        <button class="ctrl" id="next" type="button">Next</button>
-      </div>
-    </footer>
+    <nav class="nav" aria-label="Deck controls">
+      <button class="ctrl" id="prev" type="button">Prev</button>
+      <div class="dots" id="dots"></div>
+      <button class="ctrl" id="next" type="button">Next</button>
+    </nav>
   </div>
 
   <script>
     const slides = [...document.querySelectorAll(".slide")];
     const dots = document.getElementById("dots");
     let i = 0;
-
     slides.forEach((_, idx) => {
       const b = document.createElement("button");
-      b.className = "dot" + (idx === 0 ? " on" : "");
+      b.className = "dot-btn" + (idx === 0 ? " on" : "");
       b.type = "button";
-      b.setAttribute("aria-label", "Slide " + (idx + 1));
+      b.setAttribute("aria-label", "Go to slide " + (idx + 1));
       b.addEventListener("click", () => go(idx));
       dots.appendChild(b);
     });
-
     function go(n) {
-      i = Math.max(0, Math.min(slides.length - 1, n));
+      i = (n + slides.length) % slides.length;
       slides.forEach((s, idx) => s.classList.toggle("active", idx === i));
       [...dots.children].forEach((d, idx) => d.classList.toggle("on", idx === i));
-      document.getElementById("prev").disabled = i === 0;
-      document.getElementById("next").disabled = i === slides.length - 1;
     }
-
     document.getElementById("prev").onclick = () => go(i - 1);
     document.getElementById("next").onclick = () => go(i + 1);
-
     window.addEventListener("keydown", (e) => {
-      if (e.key === "ArrowRight" || e.key === " " || e.key === "PageDown") {
-        e.preventDefault(); go(i + 1);
-      } else if (e.key === "ArrowLeft" || e.key === "PageUp") {
-        e.preventDefault(); go(i - 1);
-      } else if (e.key === "Home") {
-        go(0);
-      } else if (e.key === "End") {
-        go(slides.length - 1);
-      } else if (e.key === "f" || e.key === "F") {
+      if (e.key === "ArrowRight" || e.key === " " || e.key === "PageDown") { e.preventDefault(); go(i + 1); }
+      if (e.key === "ArrowLeft" || e.key === "PageUp") { e.preventDefault(); go(i - 1); }
+      if (e.key === "f" || e.key === "F") {
         if (!document.fullscreenElement) document.documentElement.requestFullscreen?.();
         else document.exitFullscreen?.();
       }
     });
-
-    go(0);
   </script>
 </body>
 </html>
