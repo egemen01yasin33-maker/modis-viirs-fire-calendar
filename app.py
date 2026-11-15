@@ -966,7 +966,7 @@ def _fmt_pct(pct: float | None) -> str:
 
 
 def render_comparison(primary: pd.DataFrame, comparison: pd.DataFrame) -> None:
-    """Side-by-side stats with percent difference."""
+    """Side-by-side stats with percent difference (point samples)."""
     st.subheader("Period comparison")
     rows = compare_summaries(primary, comparison)
     labels = {
@@ -985,6 +985,50 @@ def render_comparison(primary: pd.DataFrame, comparison: pd.DataFrame) -> None:
         )
 
 
+def render_archive_vs_live(
+    *,
+    archive_total: int,
+    archive_start: date,
+    archive_end: date,
+    live_total: int,
+    live_start: date,
+    live_end: date,
+    live_label: str = "Live NRT",
+) -> None:
+    """
+    Compare uploaded archive span with the short live FIRMS window.
+
+    Uses daily averages so multi-year archive totals are comparable to
+    a 5–10 day NRT slice.
+    """
+    st.subheader("Archive vs live")
+    arch_days = max((archive_end - archive_start).days + 1, 1)
+    live_days = max((live_end - live_start).days + 1, 1)
+    arch_avg = archive_total / arch_days
+    live_avg = live_total / live_days
+    delta_avg = live_avg - arch_avg
+    pct = None
+    if arch_avg > 0:
+        pct = (delta_avg / arch_avg) * 100.0
+    elif live_avg > 0:
+        pct = float("inf")
+
+    st.caption(
+        f"Archive **{archive_start} → {archive_end}** ({arch_days} days) vs "
+        f"{live_label} **{live_start} → {live_end}** ({live_days} days). "
+        "Delta is live daily average vs archive daily average."
+    )
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Archive total", f"{archive_total:,}")
+    c2.metric("Archive / day", f"{arch_avg:,.1f}")
+    c3.metric(f"{live_label} total", f"{live_total:,}")
+    c4.metric(
+        f"{live_label} / day",
+        f"{live_avg:,.1f}",
+        delta=f"{delta_avg:+,.1f} ({_fmt_pct(pct)})",
+    )
+
+
 def _nrt_window_from_end(end_date: date, window_days: int) -> tuple[date, date]:
     """Slide a 1…MAX_DAY_RANGE day window that always ends on end_date."""
     today = date.today()
@@ -1001,41 +1045,41 @@ def render_control_panel(
     source_mode: str,
     archive_date_min: date | None = None,
     archive_date_max: date | None = None,
+    *,
+    nrt_compare_available: bool = False,
 ) -> dict:
-    """Bottom panel: region + dates."""
+    """Bottom panel: region + dates (+ optional live NRT compare)."""
     st.header("Settings")
 
     today = date.today()
     default_start = today - timedelta(days=2)
     default_end = today
-    compare_default_start = today - timedelta(days=9)
-    compare_default_end = today - timedelta(days=7)
     date_max = today
     nrt_min = today - timedelta(days=365)
 
     if source_mode == "Archive CSV" and archive_date_min and archive_date_max:
+        # Default to the full uploaded archive span (e.g. 2023 → 2026)
         date_max = archive_date_max
-        august_year = archive_date_max.year
-        candidate_end = date(august_year, 8, 15)
-        if candidate_end > archive_date_max or candidate_end < archive_date_min:
-            august_year -= 1
-            candidate_end = date(august_year, 8, 15)
-        if archive_date_min <= candidate_end <= archive_date_max:
-            default_end = candidate_end
-            default_start = max(archive_date_min, date(august_year, 8, 1))
-        else:
-            default_end = archive_date_max
-            default_start = max(
-                archive_date_min, archive_date_max - timedelta(days=14)
-            )
-        compare_default_end = max(
-            archive_date_min, default_start - timedelta(days=1)
-        )
-        compare_default_start = max(
-            archive_date_min, compare_default_end - timedelta(days=14)
-        )
+        default_start = archive_date_min
+        default_end = archive_date_max
 
-    compare_mode = st.toggle("Compare two periods", value=False)
+    compare_source = "none"
+    compare_mode = False
+    if source_mode == "Archive CSV" and nrt_compare_available:
+        compare_mode = st.toggle(
+            "Compare with live FIRMS (last 5–10 days)",
+            value=True,
+            help=(
+                "Uses your uploaded archive for the selected dates, then "
+                "fetches the recent NRT window your MAP_KEY allows."
+            ),
+        )
+        compare_source = "nrt" if compare_mode else "none"
+    elif source_mode == "NRT API":
+        compare_mode = False
+    else:
+        compare_mode = st.toggle("Compare two archive periods", value=False)
+        compare_source = "archive" if compare_mode else "none"
 
     col_region, col_dates = st.columns((1.6, 1.2))
 
@@ -1079,7 +1123,6 @@ def render_control_panel(
     with col_dates:
         compare_start = compare_end = None
         if source_mode == "NRT API":
-            # End date drives a sliding NRT window (max 10 days).
             end_date = st.date_input(
                 "End date",
                 value=default_end,
@@ -1093,38 +1136,12 @@ def render_control_panel(
                 max_value=MAX_DAY_RANGE,
                 value=MAX_DAY_RANGE,
                 key="nrt_window_days",
-                help=(
-                    "FIRMS NRT returns at most 10 days ending on the selected "
-                    "date. Move the end date to slide that window."
-                ),
             )
             start_date, end_date = _nrt_window_from_end(end_date, window_days)
             st.caption(
                 f"Live window: **{start_date} → {end_date}** "
-                f"({(end_date - start_date).days + 1} days). "
-                "Change the end date to slide the 10-day window."
+                f"({(end_date - start_date).days + 1} days)."
             )
-            if compare_mode:
-                compare_end = st.date_input(
-                    "Compare end date",
-                    value=compare_default_end,
-                    min_value=nrt_min,
-                    max_value=today,
-                    key="nrt_compare_end",
-                )
-                compare_window = st.slider(
-                    "Compare window (days)",
-                    min_value=1,
-                    max_value=MAX_DAY_RANGE,
-                    value=min(MAX_DAY_RANGE, 7),
-                    key="nrt_compare_window_days",
-                )
-                compare_start, compare_end = _nrt_window_from_end(
-                    compare_end, compare_window
-                )
-                st.caption(
-                    f"Compare window: **{compare_start} → {compare_end}**."
-                )
             fetch_clicked = st.button(
                 "Fetch live data",
                 type="primary",
@@ -1132,29 +1149,44 @@ def render_control_panel(
             )
         else:
             primary_range = st.date_input(
-                "Dates",
+                "Archive dates",
                 value=(default_start, default_end),
                 min_value=archive_date_min,
                 max_value=date_max,
-                key="primary_dates_v2",
+                key="primary_dates_v3",
             )
             start_date, end_date = _parse_date_range(primary_range, default_end)
 
-            if compare_mode:
+            if compare_source == "nrt":
+                live_days = st.slider(
+                    "Live window (days)",
+                    min_value=5,
+                    max_value=MAX_DAY_RANGE,
+                    value=MAX_DAY_RANGE,
+                    key="archive_nrt_window_days",
+                    help="FIRMS NRT: last N days ending today (max 10).",
+                )
+                compare_start, compare_end = _nrt_window_from_end(today, live_days)
+                st.caption(
+                    f"Live compare: **{compare_start} → {compare_end}** "
+                    f"({live_days} days via MAP_KEY)."
+                )
+            elif compare_source == "archive":
                 compare_range = st.date_input(
                     "Compare with",
-                    value=(compare_default_start, compare_default_end),
+                    value=(
+                        max(archive_date_min or default_start, default_start - timedelta(days=30)),
+                        max(archive_date_min or default_start, default_start - timedelta(days=1)),
+                    ),
                     min_value=archive_date_min,
                     max_value=date_max,
                     key="compare_dates",
                 )
                 compare_start, compare_end = _parse_date_range(
-                    compare_range, compare_default_end
+                    compare_range, default_end
                 )
-            # Archive updates live on every control change
             fetch_clicked = True
 
-    # Map radio labels back to internal region modes used elsewhere
     region_mode_internal = {
         "Preset": "Preset region",
         "Place name": "Custom place",
@@ -1172,6 +1204,7 @@ def render_control_panel(
         "start_date": start_date,
         "end_date": end_date,
         "compare_mode": compare_mode,
+        "compare_source": compare_source,
         "compare_start": compare_start,
         "compare_end": compare_end,
         "freq_choice": "Daily",
@@ -1210,19 +1243,17 @@ def render_map_focus_panel(
     exact_total: int,
     harmonized_fallback: pd.DataFrame | None,
     use_archive_map: bool = True,
+    show_focus_slider: bool = False,
 ) -> None:
     """
-    Map + date slider only. Isolated so slider drags do not rebuild the chart
-    or re-run the archive pipeline — that was the main UI freeze source.
+    Map only (optionally with a focus slider). Isolated so map redraws do not
+    rebuild the activity chart or re-run the archive pipeline.
     """
     st.subheader("Map")
     st.caption("Matched · MODIS only · VIIRS only")
 
     span_days = max((end - start).days, 0)
-    if span_days == 0:
-        st.caption(f"Single day: {start}")
-        cur_start, cur_end = start, end
-    else:
+    if show_focus_slider and span_days > 0:
         cur_start, cur_end = st.slider(
             "Date range (map focus)",
             min_value=start,
@@ -1232,6 +1263,12 @@ def render_map_focus_panel(
             key="chart_focus_slider",
         )
         cur_start, cur_end = _coerce_focus_dates(start, end, (cur_start, cur_end))
+    else:
+        cur_start, cur_end = focus_start, focus_end
+        if span_days == 0:
+            st.caption(f"Single day: {start}")
+        else:
+            st.caption(f"Map focus: {cur_start} → {cur_end}")
     st.session_state.chart_focus = (cur_start, cur_end)
 
     focused = harmonized_fallback if harmonized_fallback is not None else pd.DataFrame()
@@ -1340,7 +1377,7 @@ def render_map_focus_panel(
 
 
 def render_results(controls: dict) -> None:
-    """Summary, map on top, detailed activity chart below with date focus."""
+    """Summary, activity chart, then map underneath with shared date focus."""
     meta = st.session_state.last_meta or {}
     harmonized: pd.DataFrame = st.session_state.harmonized
     comparison: pd.DataFrame | None = st.session_state.get("comparison")
@@ -1438,7 +1475,21 @@ def render_results(controls: dict) -> None:
         f"{quality:.0f}%" if quality is not None else "—",
     )
 
-    if comparison is not None and not comparison.empty and harmonized is not None:
+    cmp_meta = st.session_state.get("comparison_meta") or {}
+    if cmp_meta.get("source") == "NRT API":
+        st.divider()
+        live_total = int(cmp_meta.get("raw_rows") or 0)
+        if comparison is not None and not comparison.empty and live_total <= 0:
+            live_total = int(len(comparison))
+        render_archive_vs_live(
+            archive_total=int(meta.get("raw_rows") or exact_total),
+            archive_start=start,
+            archive_end=end,
+            live_total=live_total,
+            live_start=cmp_meta.get("start_date") or start,
+            live_end=cmp_meta.get("end_date") or end,
+        )
+    elif comparison is not None and not comparison.empty and harmonized is not None:
         st.divider()
         render_comparison(harmonized, comparison)
 
@@ -1455,42 +1506,61 @@ def render_results(controls: dict) -> None:
 
     st.divider()
 
-    # Map + date slider in an isolated fragment so drag only re-draws the map
-    render_map_focus_panel(
-        bbox=bbox if isinstance(bbox, tuple) else None,
-        start=start,
-        end=end,
-        focus_start=focus_start,
-        focus_end=focus_end,
-        exact_total=exact_total,
-        harmonized_fallback=harmonized,
-        use_archive_map=meta.get("source") != "NRT API",
-    )
-
-    # —— Activity chart (full width, below map) ——
+    # —— Activity chart first; map sits underneath ——
     st.subheader("Activity")
     head_l, head_r = st.columns((2.2, 1.0))
     with head_l:
         st.caption(
-            "Totals stay exact for any Global / multi-year span. "
-            "The map above is a spatial sample so the UI stays smooth."
+            "Exact totals from your uploaded archive. "
+            "Long ranges auto-aggregate so the chart stays readable."
         )
     with head_r:
-        default_weekly = ((end - start).days >= 90)
+        span_days = max((end - start).days, 0)
+        if span_days >= 365:
+            detail_opts = ("Monthly", "Weekly")
+            default_idx = 0
+        elif span_days >= 90:
+            detail_opts = ("Weekly", "Daily")
+            default_idx = 0
+        else:
+            detail_opts = ("Daily", "Weekly")
+            default_idx = 0
         freq_choice = st.radio(
             "Detail",
-            options=("Daily", "Weekly"),
+            options=detail_opts,
             horizontal=True,
-            index=1 if default_weekly else 0,
-            key="chart_freq",
+            index=default_idx,
+            key="chart_freq_v2",
         )
 
-    # Keep chart focus in sync with the map fragment slider
-    raw_focus = st.session_state.get("chart_focus_slider")
-    if raw_focus is None:
-        raw_focus = st.session_state.get("chart_focus", (focus_start, focus_end))
-    focus_start, focus_end = _coerce_focus_dates(start, end, raw_focus)
-    st.session_state.chart_focus = (focus_start, focus_end)
+    span_days = max((end - start).days, 0)
+    if span_days > 0:
+        raw_focus = st.session_state.get("chart_focus", (start, end))
+        # Default chart focus: full archive selection (not a tiny 10-day slice)
+        if (
+            st.session_state.get("_focus_data_key") == data_key
+            and isinstance(raw_focus, (tuple, list))
+            and len(raw_focus) == 2
+        ):
+            pass
+        else:
+            raw_focus = (start, end)
+        focus_start, focus_end = st.slider(
+            "Chart / map focus",
+            min_value=start,
+            max_value=end,
+            value=_coerce_focus_dates(start, end, raw_focus),
+            format="YYYY-MM-DD",
+            key="chart_focus_slider",
+        )
+        focus_start, focus_end = _coerce_focus_dates(
+            start, end, (focus_start, focus_end)
+        )
+        st.session_state.chart_focus = (focus_start, focus_end)
+    else:
+        focus_start, focus_end = start, end
+        st.session_state.chart_focus = (focus_start, focus_end)
+
     if isinstance(daily_series, pd.DataFrame) and not daily_series.empty:
         ds = daily_series.copy()
         ds["period"] = pd.to_datetime(ds["period"])
@@ -1508,14 +1578,21 @@ def render_results(controls: dict) -> None:
             mean_total > 0
         )
 
-    # Chart from exact aggregates, downsampled so Plotly stays light
     if daily_focus.empty:
         st.info("Not enough data for the chart.")
     else:
         chart_daily = daily_focus.copy()
         span_focus = max((focus_end - focus_start).days, 1)
-        # Auto coarsen for long windows (still no selection limits)
-        if freq_choice == "Weekly" or span_focus >= 90:
+        if freq_choice == "Monthly" or span_focus >= 700:
+            tmp = chart_daily.set_index("period").sort_index()
+            agg = {
+                k: "sum"
+                for k in ("total", "frp_sum", MATCHED, MODIS_ONLY, VIIRS_ONLY)
+                if k in tmp.columns
+            }
+            chart_daily = tmp.resample("MS").agg(agg).dropna(how="all").reset_index()
+            freq_label = "Monthly"
+        elif freq_choice == "Weekly" or span_focus >= 90:
             tmp = chart_daily.set_index("period").sort_index()
             agg = {
                 k: "sum"
@@ -1523,16 +1600,16 @@ def render_results(controls: dict) -> None:
                 if k in tmp.columns
             }
             chart_daily = tmp.resample("W-MON").agg(agg).dropna(how="all").reset_index()
-            positive = chart_daily.loc[chart_daily["total"] > 0, "total"]
-            mean_total = float(positive.mean()) if len(positive) else 0.0
-            chart_daily["mean_total"] = mean_total
-            chart_daily["threshold"] = mean_total * 2.0
-            chart_daily["is_anomaly"] = (chart_daily["total"] > chart_daily["threshold"]) & (
-                mean_total > 0
-            )
             freq_label = "Weekly"
         else:
             freq_label = "Daily"
+        positive = chart_daily.loc[chart_daily["total"] > 0, "total"]
+        mean_total = float(positive.mean()) if len(positive) else 0.0
+        chart_daily["mean_total"] = mean_total
+        chart_daily["threshold"] = mean_total * 2.0
+        chart_daily["is_anomaly"] = (chart_daily["total"] > chart_daily["threshold"]) & (
+            mean_total > 0
+        )
         chart_daily = _downsample_chart_daily(chart_daily)
 
         ts = chart_daily[
@@ -1556,30 +1633,19 @@ def render_results(controls: dict) -> None:
             key="fire_activity",
         )
 
-    # —— Monthly trend (hotspots + FRP, MoM %) ——
-    monthly = st.session_state.get("monthly_series")
-    if isinstance(monthly, pd.DataFrame) and not monthly.empty:
-        st.subheader("Monthly trend")
-        changes = latest_month_changes(monthly)
-        m1, m2, m3 = st.columns(3)
-        last = monthly.iloc[-1]
-        m1.metric(
-            "Latest month hotspots",
-            f"{int(last['total']):,}",
-            delta=_format_pct(changes["pct_change_total"]),
-        )
-        m2.metric(
-            "Latest month FRP",
-            f"{float(last['frp_sum']):,.0f} MW",
-            delta=_format_pct(changes["pct_change_frp"]),
-        )
-        m3.caption("Delta vs previous month in the selected range.")
-        st.plotly_chart(
-            build_monthly_trend_chart(monthly),
-            use_container_width=True,
-            config={"displayModeBar": False},
-            key="fire_monthly",
-        )
+    st.divider()
+    # Map under the chart — uses the same focus window
+    render_map_focus_panel(
+        bbox=bbox if isinstance(bbox, tuple) else None,
+        start=start,
+        end=end,
+        focus_start=focus_start,
+        focus_end=focus_end,
+        exact_total=exact_total,
+        harmonized_fallback=harmonized,
+        use_archive_map=meta.get("source") != "NRT API",
+        show_focus_slider=False,
+    )
 
 
 def run_archive_pipeline(controls: dict) -> str | None:
@@ -1606,6 +1672,7 @@ def run_archive_pipeline(controls: dict) -> str | None:
         controls["start_date"].isoformat(),
         controls["end_date"].isoformat(),
         bool(controls.get("compare_mode")),
+        str(controls.get("compare_source") or "none"),
         (controls.get("compare_start") or date.min).isoformat()
         if controls.get("compare_mode")
         else "",
@@ -1707,28 +1774,70 @@ def run_archive_pipeline(controls: dict) -> str | None:
         and controls["compare_start"]
         and controls["compare_end"]
     ):
-        with st.spinner("Loading comparison…"):
-            try:
-                cmp_payload = load_archive_slice(
-                    str(DATA_PATH),
-                    mtimes,
-                    min_lon,
-                    min_lat,
-                    max_lon,
-                    max_lat,
-                    controls["compare_start"].isoformat(),
-                    controls["compare_end"].isoformat(),
-                )
-            except Exception:  # noqa: BLE001
-                cmp_payload = None
+        cmp_source = controls.get("compare_source") or "archive"
+        with st.spinner(
+            "Fetching live FIRMS…"
+            if cmp_source == "nrt"
+            else "Loading comparison…"
+        ):
+            if cmp_source == "nrt":
+                map_key = get_firms_map_key()
+                if not map_key:
+                    st.warning("Live compare needs FIRMS_MAP_KEY in .env.")
+                    cmp_payload = None
+                else:
+                    try:
+                        secondary = _fetch_and_harmonize(
+                            map_key,
+                            min_lon,
+                            min_lat,
+                            max_lon,
+                            max_lat,
+                            controls["compare_start"],
+                            controls["compare_end"],
+                        )
+                        cmp_payload = {
+                            "harmonized": secondary,
+                            "raw_rows": int(len(secondary)),
+                        }
+                    except FirmsApiError as exc:
+                        st.warning(str(exc))
+                        cmp_payload = None
+                    except Exception:  # noqa: BLE001
+                        st.warning("Could not fetch live FIRMS for comparison.")
+                        cmp_payload = None
+            else:
+                try:
+                    cmp_payload = load_archive_slice(
+                        str(DATA_PATH),
+                        mtimes,
+                        min_lon,
+                        min_lat,
+                        max_lon,
+                        max_lat,
+                        controls["compare_start"].isoformat(),
+                        controls["compare_end"].isoformat(),
+                    )
+                except Exception:  # noqa: BLE001
+                    cmp_payload = None
+
         if cmp_payload is None or cmp_payload["harmonized"].empty:
             st.warning("No fires found in the comparison period.")
         else:
-            st.session_state.comparison = cmp_payload["harmonized"]
+            secondary = cmp_payload["harmonized"]
+            st.session_state.comparison = _sample_for_map(
+                secondary, MAX_MAP_RENDER
+            )
+            raw_n = int(
+                cmp_payload.get("raw_rows")
+                or cmp_payload.get("stats", {}).get("total_count")
+                or len(secondary)
+            )
             st.session_state.comparison_meta = {
                 "start_date": controls["compare_start"],
                 "end_date": controls["compare_end"],
-                "raw_rows": int(len(cmp_payload["harmonized"])),
+                "raw_rows": raw_n,
+                "source": "NRT API" if cmp_source == "nrt" else "Archive CSV",
             }
 
     return None
@@ -1861,6 +1970,8 @@ def run_nrt_pipeline(controls: dict, map_key: str) -> None:
 def live_archive_explorer(
     archive_date_min: date | None,
     archive_date_max: date | None,
+    *,
+    nrt_compare_available: bool = False,
 ) -> None:
     """
     Controls + results. Archive data reloads only when region/dates change;
@@ -1870,6 +1981,7 @@ def live_archive_explorer(
         "Archive CSV",
         archive_date_min=archive_date_min,
         archive_date_max=archive_date_max,
+        nrt_compare_available=nrt_compare_available,
     )
     run_archive_pipeline(controls)
     if (
@@ -1884,7 +1996,10 @@ def live_archive_explorer(
 
 def main() -> None:
     st.title("Unified Fire Activity Calendar")
-    st.caption("MODIS and VIIRS fire activity on one map.")
+    st.caption(
+        "Uploaded archive (e.g. 2023–2026) on the chart; "
+        "optional live FIRMS window for comparison; map below."
+    )
 
     if "harmonized" not in st.session_state:
         st.session_state.harmonized = None
@@ -1898,22 +2013,7 @@ def main() -> None:
     has_archive = bool(inventory)
     has_nrt = bool(map_key)
 
-    if has_archive and has_nrt:
-        source_mode = st.radio(
-            "Data source",
-            options=("Archive CSV", "NRT API"),
-            horizontal=True,
-            key="data_source_mode",
-            help=(
-                "Archive = local CSVs in data/. "
-                "NRT API = live FIRMS (≤10 days ending on the date you pick)."
-            ),
-        )
-    elif has_archive:
-        source_mode = "Archive CSV"
-    elif has_nrt:
-        source_mode = "NRT API"
-    else:
+    if not has_archive and not has_nrt:
         st.warning(
             "No fire archive found and live data needs a FIRMS key in .env."
         )
@@ -1931,27 +2031,39 @@ def main() -> None:
                 st.rerun()
         return
 
-    if source_mode == "NRT API":
-        st.caption(
-            "Live NRT: pick an end date — the window slides with it "
-            f"(max {MAX_DAY_RANGE} days)."
-        )
+    if has_archive:
+        if archive_date_min and archive_date_max:
+            st.caption(
+                f"Archive coverage: **{archive_date_min} → {archive_date_max}**"
+                + (
+                    f". Live compare uses MAP_KEY (last 5–{MAX_DAY_RANGE} days)."
+                    if has_nrt
+                    else "."
+                )
+            )
         st.divider()
-        controls = render_control_panel(
-            source_mode,
-            archive_date_min=archive_date_min,
-            archive_date_max=archive_date_max,
+        live_archive_explorer(
+            archive_date_min,
+            archive_date_max,
+            nrt_compare_available=has_nrt,
         )
-        if controls["fetch_clicked"]:
-            run_nrt_pipeline(controls, map_key)
-        if st.session_state.harmonized is not None:
-            render_results(controls)
         return
 
-    # Archive: live updates as soon as region/dates change
-    st.caption("Change region or dates — the map updates immediately.")
+    # NRT-only fallback when no CSVs are present
+    st.caption(
+        "No archive CSVs — live NRT only "
+        f"(max {MAX_DAY_RANGE} days ending on the date you pick)."
+    )
     st.divider()
-    live_archive_explorer(archive_date_min, archive_date_max)
+    controls = render_control_panel(
+        "NRT API",
+        archive_date_min=archive_date_min,
+        archive_date_max=archive_date_max,
+    )
+    if controls["fetch_clicked"]:
+        run_nrt_pipeline(controls, map_key)
+    if st.session_state.harmonized is not None:
+        render_results(controls)
 
 
 if __name__ == "__main__":

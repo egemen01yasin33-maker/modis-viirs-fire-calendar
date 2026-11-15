@@ -2,11 +2,12 @@
 
 NASA Space Apps Challenge 2026 – MODIS & VIIRS hot spot harmonization.
 
-Dark turquoise / black Streamlit UI. Two data sources:
+Dark Streamlit UI. Primary path:
 
-1. **Archive CSV** — drop FIRMS Archive downloads into `data/`; the app streams
-   multi-GB files and keeps only the selected region + date range.
-2. **NRT API** — live FIRMS Area API via `FIRMS_MAP_KEY` in `.env`.
+1. **Archive CSV** — drop FIRMS Archive downloads into `data/` (e.g. 2023–2026);
+   exact activity chart + sampled map for the selected region.
+2. **Live compare** — with `FIRMS_MAP_KEY`, compare that archive span to the
+   last 5–10 NRT days (daily averages so the periods stay comparable).
 
 Matched (High Confidence) = within **1 km** and **±6 hours**.
 
@@ -14,10 +15,9 @@ Matched (High Confidence) = within **1 km** and **±6 hours**.
 
 - Preset regions (Global, Amazon, Australia, California, Mediterranean,
   Siberia, Indonesia, Turkey sub-regions) + place name + manual bbox
-- Auto sensors: MODIS_NRT + VIIRS NOAA-20/21 (NRT mode)
-- Anomaly days (>2× mean daily activity)
-- Comparison mode (two date ranges, same region)
-- OpenStreetMap Folium map + Plotly activity calendar
+- Activity chart above the map (Monthly/Weekly/Daily auto for long spans)
+- Archive vs live NRT comparison (MAP_KEY)
+- Anomaly days (>2× mean activity)
 - Controls at the bottom (no left sidebar)
 
 ## Run locally
@@ -46,14 +46,14 @@ In Archive mode pick a region and a date window that falls inside your CSV
 coverage, then click **Apply / Refresh**. Worldwide multi-year dumps are not
 loaded into RAM in full.
 
-### NRT API
+### Live NRT compare
 
 1. Get a [FIRMS MAP Key](https://firms.modaps.eosdis.nasa.gov/api/key/).
 2. Put `FIRMS_MAP_KEY=...` in `.env`.
-3. Choose **NRT API** as the data source (available alongside Archive when both exist).
-4. Pick an **end date** — the live window slides with it (1–10 days). Click **Fetch live data**.
+3. Keep **Compare with live FIRMS** on, pick 5–10 days — the app fetches that
+   window (chunked if needed) and shows archive vs live daily averages.
 
-Longer windows are fetched in short API chunks so keys that reject `day_range>5` still cover a full 10-day slide.
+Without archive CSVs the app falls back to live-only NRT mode.
 
 ## Layout
 
