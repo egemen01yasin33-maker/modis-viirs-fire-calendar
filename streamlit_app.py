@@ -1,3 +1,8 @@
+import streamlit as st
+st.title("Test - App is running")
+st.write("If you see this, the app started successfully.")
+st.stop()
+
 """
 Unified Fire Activity Calendar
 
@@ -17,7 +22,6 @@ from pathlib import Path
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-import streamlit as st
 from dotenv import load_dotenv
 
 from src.analytics import (
