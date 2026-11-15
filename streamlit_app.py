@@ -109,25 +109,26 @@ def _is_hosted_deploy() -> bool:
 
 def _allow_host_map_key() -> bool:
     """
-    Host FIRMS_MAP_KEY is for local/dev by default.
+    Use host FIRMS_MAP_KEY (Cursor secret / .env) unless explicitly disabled.
 
-    On a hosted deploy it stays off unless FIRMS_ALLOW_HOST_KEY is explicitly set,
-    so anonymous visitors cannot burn the operator quota.
+    Rate limits still cap live FIRMS calls. Set FIRMS_ALLOW_HOST_KEY=false on a
+    public demo if you do not want visitors to share the operator quota.
     """
     flag = (os.getenv("FIRMS_ALLOW_HOST_KEY") or "").strip().lower()
-    if flag in {"1", "true", "yes", "on"}:
-        return True
     if flag in {"0", "false", "no", "off"}:
         return False
-    return not _is_hosted_deploy()
+    if flag in {"1", "true", "yes", "on"}:
+        return True
+    # Default: allow — Cursor-bound secrets and local .env both work again.
+    return True
 
 
 def get_firms_map_key() -> str:
     """
     Resolve MAP_KEY for NRT calls.
 
-    Prefer a session-entered key. The host env key is only used when allowed
-    (local/dev, or FIRMS_ALLOW_HOST_KEY). Value is never logged.
+    Prefer a session-entered key, then host env (Cursor secret / .env).
+    Value is never logged.
     """
     session_key = (st.session_state.get("visitor_map_key") or "").strip()
     if session_key:
@@ -2182,18 +2183,20 @@ def main() -> None:
 
     if not has_archive and not has_nrt:
         st.warning(
-            "No fire archive found. Upload CSVs or enter a FIRMS MAP_KEY for live data."
+            "No fire archive found. Put CSVs in `data/` or enter a FIRMS MAP_KEY."
         )
         st.info(
-            f"Multi-GB archives: copy `*.csv` into the app **`data/`** folder "
-            f"(`{DATA_PATH}`), then refresh. Browser upload is capped at "
-            f"{MAX_UPLOAD_BYTES // (1024 * 1024)} MiB × {MAX_UPLOAD_FILES} files."
+            "Large archives (multi-GB) are **not stored in git** and do not survive "
+            "a fresh cloud machine. Copy FIRMS Archive `*.csv` into "
+            f"**`{DATA_PATH}`**, then refresh. "
+            f"Browser upload is only for small files "
+            f"({MAX_UPLOAD_BYTES // (1024 * 1024)} MiB × {MAX_UPLOAD_FILES})."
         )
         with st.expander("Add archive files (browser)", expanded=True):
             st.caption(
                 f"Up to {MAX_UPLOAD_FILES} CSV files, "
                 f"{MAX_UPLOAD_BYTES // (1024 * 1024)} MiB each. "
-                "Saved only for this session."
+                "Saved only for this browser session under data/_uploads/."
             )
             uploads = st.file_uploader(
                 "Upload CSV",
