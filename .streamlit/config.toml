@@ -1,0 +1,16 @@
+[server]
+headless = true
+port = 8529
+address = "0.0.0.0"
+enableCORS = false
+enableXsrfProtection = false
+
+[browser]
+gatherUsageStats = false
+
+[theme]
+base = "dark"
+primaryColor = "#00e5d4"
+backgroundColor = "#000000"
+secondaryBackgroundColor = "#0a1214"
+textColor = "#e6fffb"
