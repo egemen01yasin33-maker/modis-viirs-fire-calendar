@@ -1,9 +1,10 @@
 {
   "name": "fire-activity-calendar",
   "private": true,
-  "description": "Unified Fire Activity Calendar – Harmonized MODIS & VIIRS",
+  "description": "Unified Fire Activity Calendar \u2013 Harmonized MODIS & VIIRS",
   "scripts": {
-    "start": "streamlit run app.py --server.port=${PORT:-8529} --server.address=0.0.0.0 --browser.gatherUsageStats=false"
+    "start": "uvicorn app:app --host 0.0.0.0 --port ${PORT:-8529}",
+    "dev": "streamlit run streamlit_app.py --server.port=${PORT:-8529} --server.address=0.0.0.0 --browser.gatherUsageStats=false"
   },
   "engines": {
     "node": ">=18"

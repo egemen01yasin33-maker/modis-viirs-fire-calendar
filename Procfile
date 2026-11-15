@@ -1,1 +1,1 @@
-web: streamlit run app.py --server.port=${PORT:-8529} --server.address=0.0.0.0 --browser.gatherUsageStats=false
+web: uvicorn app:app --host 0.0.0.0 --port ${PORT:-8529}

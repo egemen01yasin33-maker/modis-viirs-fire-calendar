@@ -27,7 +27,9 @@ python -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 cp .env.example .env        # set FIRMS_MAP_KEY for NRT mode
-streamlit run app.py --server.port 8529
+streamlit run streamlit_app.py --server.port 8529
+# or ASGI (same entry Cursor publish uses):
+# uvicorn app:app --host 0.0.0.0 --port 8529
 ```
 
 ### Archive CSVs
@@ -58,7 +60,8 @@ Without archive CSVs the app falls back to live-only NRT mode.
 ## Layout
 
 ```
-app.py                 # Streamlit UI
+app.py                 # ASGI entry (st.App)
+streamlit_app.py       # Streamlit UI
 src/firms_api.py       # FIRMS Area API client
 src/harmonize.py       # Distance / time matching
 src/archive_csv.py     # Chunked archive loaders
