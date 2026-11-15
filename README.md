@@ -18,10 +18,14 @@ Matched (High Confidence) = within **1 km** and **±6 hours**.
 | Submission field | What to paste |
 | --- | --- |
 | **Project Demo** | 7-slide pitch (English): https://egemen01yasin33-maker.github.io/modis-viirs-fire-calendar/ |
-| **Final Project** | Source repo: https://github.com/egemen01yasin33-maker/modis-viirs-fire-calendar |
+| **Final Project** | Source + live app (see below) |
 | **NASA Data** | [NASA FIRMS](https://firms.modaps.eosdis.nasa.gov/) (MODIS + VIIRS Archive / NRT) |
 
-Open each link in a private window before submit. Live Streamlit hosting is optional for judging; the demo deck + public GitHub satisfy the form.
+**Live Streamlit (works):** Cloudflare tunnel from this agent — ask the agent for the current `*.trycloudflare.com` URL (WebSockets OK).
+
+**Cursor Apps URL** `https://fire-calendar.apps.grok.bot` serves Streamlit HTML but the host does **not** upgrade WebSockets (`/_stcore/stream` → HTTP 200 HTML), so the UI stays on a grey skeleton. Use the tunnel (or Streamlit Community Cloud) for a clickable demo until that is fixed.
+
+Open each link in a private window before submit.
 
 ## Features
 

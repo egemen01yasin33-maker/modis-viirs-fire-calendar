@@ -3,7 +3,8 @@ headless = true
 port = 8529
 address = "0.0.0.0"
 enableCORS = false
-enableXsrfProtection = true
+enableXsrfProtection = false
+enableWebsocketCompression = false
 
 [browser]
 gatherUsageStats = false

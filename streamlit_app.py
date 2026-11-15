@@ -74,14 +74,26 @@ DATA_PATH = data_dir(ROOT)
 # NRT abuse guards — host MAP_KEY must not be an unbounded public proxy
 NRT_MAX_FETCHES_PER_SESSION = 5
 NRT_MIN_SECONDS_BETWEEN_FETCHES = 20
+# Tighter caps on public hosts (any visitor shares the operator key)
+NRT_MAX_FETCHES_PER_SESSION_HOSTED = 2
+NRT_MIN_SECONDS_BETWEEN_FETCHES_HOSTED = 45
+
+
+def _is_hosted_public() -> bool:
+    """True on Cursor / Vercel-style hosts (public demo surface)."""
+    return bool(os.getenv("CURSOR_APP_ID") or os.getenv("VERCEL"))
 
 
 def active_data_path() -> Path:
     """Archive root for this session (shared data/ or per-visitor uploads)."""
+    data_root = DATA_PATH.resolve()
     override = st.session_state.get("archive_root")
     if override:
-        return Path(override)
-    return DATA_PATH
+        path = Path(str(override)).resolve()
+        if path != data_root and data_root not in path.parents:
+            raise ArchiveCsvError("Invalid archive root path.")
+        return path
+    return data_root
 
 
 st.set_page_config(
@@ -139,16 +151,26 @@ def session_upload_dir() -> Path:
 
 def _nrt_rate_limit_ok() -> tuple[bool, str]:
     """Session rate limit for outbound FIRMS Area API calls."""
+    max_fetches = (
+        NRT_MAX_FETCHES_PER_SESSION_HOSTED
+        if _is_hosted_public()
+        else NRT_MAX_FETCHES_PER_SESSION
+    )
+    min_gap = (
+        NRT_MIN_SECONDS_BETWEEN_FETCHES_HOSTED
+        if _is_hosted_public()
+        else NRT_MIN_SECONDS_BETWEEN_FETCHES
+    )
     now = time.monotonic()
     stamps: list[float] = list(st.session_state.get("nrt_fetch_times") or [])
     stamps = [t for t in stamps if now - t < 3600]
-    if len(stamps) >= NRT_MAX_FETCHES_PER_SESSION:
+    if len(stamps) >= max_fetches:
         return (
             False,
-            f"Live FIRMS limit reached ({NRT_MAX_FETCHES_PER_SESSION} fetches / session).",
+            f"Live FIRMS limit reached ({max_fetches} fetches / session).",
         )
-    if stamps and (now - stamps[-1]) < NRT_MIN_SECONDS_BETWEEN_FETCHES:
-        wait = int(NRT_MIN_SECONDS_BETWEEN_FETCHES - (now - stamps[-1])) + 1
+    if stamps and (now - stamps[-1]) < min_gap:
+        wait = int(min_gap - (now - stamps[-1])) + 1
         return False, f"Please wait {wait}s before another live FIRMS request."
     return True, ""
 
@@ -2279,14 +2301,14 @@ def main() -> None:
             load_map_slice.clear()
             st.rerun()
 
-        # Hosted apps: pull archives automatically on first empty boot
-        hosted = bool(os.getenv("CURSOR_APP_ID") or os.getenv("VERCEL"))
-        if hosted and need and not st.session_state.get("_auto_restore_tried"):
-            st.session_state._auto_restore_tried = True
-            try:
-                _run_restore()
-            except ArchiveCsvError as exc:
-                st.error(str(exc))
+        # Never auto-download multi-GB archives on public hosts (hangs + cost).
+        # Restore is local/operator-only — not exposed on hosted public demos.
+        if _is_hosted_public():
+            st.info(
+                "Public demo host: use live NRT with FIRMS_MAP_KEY, or run locally "
+                "and restore archives from GitHub Release."
+            )
+            return
 
         if st.button(
             "Restore full archives from GitHub",
