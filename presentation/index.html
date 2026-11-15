@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="tr">
+<html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -80,46 +80,49 @@
       background-clip: text;
       color: transparent;
     }
+    .pills { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+    .pill {
+      border: 1px solid var(--line);
+      background: rgba(0, 229, 212, 0.06);
+      color: var(--cyan);
+      padding: 0.35rem 0.7rem;
+      font-size: 0.82rem;
+      font-weight: 500;
+    }
     .grid {
       display: grid;
-      gap: 0.9rem;
-      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 0.75rem;
     }
     .card {
       background: var(--panel);
       border: 1px solid var(--line);
-      border-radius: 12px;
-      padding: 1rem 1.1rem;
+      padding: 0.95rem 1rem;
     }
     .stat-val {
       font-family: Syne, sans-serif;
-      font-size: 1.85rem;
-      font-weight: 700;
+      font-size: 1.55rem;
+      font-weight: 800;
       color: var(--teal);
     }
-    .stat-lbl { color: var(--muted); font-size: 0.88rem; margin-top: 0.2rem; }
-    .pill {
-      display: inline-flex;
-      border: 1px solid var(--line);
-      background: var(--bg-2);
-      color: var(--cyan);
-      border-radius: 999px;
-      padding: 0.32rem 0.7rem;
-      font-size: 0.82rem;
-      font-weight: 500;
-    }
-    .pills { display: flex; flex-wrap: wrap; gap: 0.45rem; }
-    .rule {
+    .stat-lbl { font-size: 0.82rem; color: var(--muted); margin-top: 0.2rem; }
+    .two {
       display: grid;
-      grid-template-columns: 1fr auto 1fr;
-      gap: 0.9rem;
-      align-items: center;
+      grid-template-columns: 1.35fr 1fr;
+      gap: 1rem;
     }
-    .rule .op {
+    @media (max-width: 800px) { .two { grid-template-columns: 1fr; } }
+    ul { margin: 0.4rem 0 0; padding-left: 1.15rem; }
+    .rule {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.75rem;
+    }
+    .op {
       font-family: Syne, sans-serif;
+      font-weight: 800;
       color: var(--amber);
-      font-size: 1.25rem;
-      font-weight: 700;
     }
     table {
       width: 100%;
@@ -128,72 +131,59 @@
     }
     th, td {
       text-align: left;
-      padding: 0.65rem 0.5rem;
+      padding: 0.55rem 0.65rem;
       border-bottom: 1px solid var(--line);
       vertical-align: top;
     }
     th { color: var(--cyan); font-weight: 600; }
-    td { color: var(--muted); }
-    td:first-child { color: var(--ink); font-weight: 600; width: 30%; }
+    td:first-child { color: var(--ink); font-weight: 600; white-space: nowrap; }
+    .alert {
+      border: 1px solid rgba(251, 191, 36, 0.45);
+      background: rgba(251, 191, 36, 0.08);
+      color: var(--amber);
+      padding: 0.75rem 1rem;
+      font-weight: 600;
+    }
+    .tiny { font-size: 0.85rem; color: var(--muted); }
+    .page {
+      justify-self: end;
+      font-size: 0.78rem;
+      letter-spacing: 0.12em;
+      color: var(--muted);
+      margin-top: 0.4rem;
+    }
     .footer {
       display: flex;
       align-items: center;
       justify-content: space-between;
       gap: 1rem;
-      padding: 0.7rem 1.2rem 0.95rem;
+      padding: 0.75rem 1.2rem;
       border-top: 1px solid var(--line);
-      background: rgba(7, 11, 16, 0.88);
-      backdrop-filter: blur(8px);
+      background: rgba(7, 11, 16, 0.92);
     }
-    .dots { display: flex; gap: 0.38rem; flex-wrap: wrap; }
+    .dots { display: flex; gap: 0.4rem; }
     .dot {
-      width: 9px; height: 9px; border-radius: 50%;
-      background: var(--line); border: 0; cursor: pointer; padding: 0;
+      width: 8px; height: 8px; border-radius: 50%;
+      border: 0; padding: 0; cursor: pointer;
+      background: #33414c;
     }
     .dot.on { background: var(--teal); }
-    .nav { display: flex; gap: 0.45rem; }
-    button.ctrl {
+    .hint { color: var(--muted); font-size: 0.78rem; }
+    .nav { display: flex; gap: 0.5rem; }
+    .ctrl {
       background: var(--panel);
-      color: var(--ink);
       border: 1px solid var(--line);
-      border-radius: 10px;
-      padding: 0.5rem 0.85rem;
-      font: inherit;
+      color: var(--ink);
+      padding: 0.45rem 0.85rem;
       cursor: pointer;
+      font: inherit;
     }
-    button.ctrl:hover { border-color: var(--teal); color: var(--teal); }
-    button.ctrl:disabled { opacity: 0.35; cursor: default; }
-    .hint { color: var(--muted); font-size: 0.82rem; }
-    .alert {
-      border: 1px solid rgba(251, 191, 36, 0.45);
-      background: rgba(251, 191, 36, 0.08);
-      color: var(--amber);
-      border-radius: 10px;
-      padding: 0.8rem 0.95rem;
-      font-weight: 600;
-    }
-    .two {
-      display: grid;
-      grid-template-columns: 1.15fr 1fr;
-      gap: 1rem;
-    }
-    @media (max-width: 820px) {
-      .two, .rule { grid-template-columns: 1fr; }
-      .rule .op { display: none; }
-    }
-    ul { margin: 0; padding-left: 1.1rem; }
-    li + li { margin-top: 0.4rem; }
-    .tiny { font-size: 0.82rem; color: var(--muted); }
+    .ctrl:disabled { opacity: 0.35; cursor: default; }
     code {
       font-size: 0.88em;
       color: var(--cyan);
     }
-    .page {
-      justify-self: end;
-      color: var(--muted);
-      font-size: 0.8rem;
-      letter-spacing: 0.06em;
-    }
+    strong { color: var(--ink); }
   </style>
 </head>
 <body>
@@ -204,16 +194,16 @@
       <section class="slide active" data-i="0">
         <div class="kicker">NASA Space Apps Challenge 2026</div>
         <div class="brand">Unified Fire Activity Calendar</div>
-        <p class="lead">MODIS ve VIIRS yangın noktalarını tek haritada ve tek takvimde birleştiren operasyonel panel — adet, FRP, kalite ve uyarı aynı ekranda.</p>
+        <p class="lead">An operational panel that merges MODIS and VIIRS fire hotspots into one map and one calendar — counts, FRP, quality, and alerts on a single screen.</p>
         <div class="pills">
           <span class="pill">Hotspot harmonization</span>
           <span class="pill">FIRMS Archive + NRT</span>
           <span class="pill">FRP · Quality · Alerts</span>
         </div>
         <div class="grid" style="margin-top:0.6rem">
-          <div class="card"><div class="stat-val">1 km</div><div class="stat-lbl">Eşleşme mesafesi</div></div>
-          <div class="card"><div class="stat-val">±6 saat</div><div class="stat-lbl">Zaman penceresi</div></div>
-          <div class="card"><div class="stat-val">115M+</div><div class="stat-lbl">İndekslenmiş arşiv tespiti</div></div>
+          <div class="card"><div class="stat-val">1 km</div><div class="stat-lbl">Match distance</div></div>
+          <div class="card"><div class="stat-val">±6 h</div><div class="stat-lbl">Time window</div></div>
+          <div class="card"><div class="stat-val">115M+</div><div class="stat-lbl">Indexed archive detections</div></div>
         </div>
         <div class="page">01 / 07</div>
       </section>
@@ -221,19 +211,19 @@
       <!-- 2 / 7 -->
       <section class="slide" data-i="1">
         <div class="kicker">Problem</div>
-        <h2>Aynı yangın, iki sensör, parçalı gerçek</h2>
+        <h2>Same fire, two sensors, fragmented truth</h2>
         <div class="two">
           <div>
-            <p class="lead">MODIS ve VIIRS aynı coğrafyayı farklı çözünürlük, güven ve geçiş saatleriyle görür. Ortak bir “bu hafta ne kadar yoğundu?” cevabı yok.</p>
+            <p class="lead">MODIS and VIIRS see the same landscape with different resolution, confidence, and overpass times. There is no shared answer to “how intense was this week?”</p>
             <ul>
-              <li>Çift sayım veya kaçan ortak tespit</li>
-              <li>Çok yıllı global arşiv ya UI’yi dondurur ya seyrek bölgeleri siler</li>
-              <li>Hotspot sayısı ile enerji (FRP) nadiren aynı panelde buluşur</li>
+              <li>Double-counting or missed co-detections</li>
+              <li>Multi-year global archives freeze the UI or erase sparse regions</li>
+              <li>Hotspot counts and energy (FRP) rarely appear on one panel</li>
             </ul>
           </div>
           <div class="card">
-            <h3>Kim için?</h3>
-            <p>Yangın yönetimi, afet koordinasyonu, araştırmacılar ve açık FIRMS verisiyle çalışan yerel ekipler.</p>
+            <h3>Who is it for?</h3>
+            <p>Fire managers, disaster coordinators, researchers, and local teams working with open FIRMS data.</p>
           </div>
         </div>
         <div class="page">02 / 07</div>
@@ -241,34 +231,34 @@
 
       <!-- 3 / 7 -->
       <section class="slide" data-i="2">
-        <div class="kicker">Çözüm + kural</div>
-        <h2>Tek harita · tek takvim · açık eşik</h2>
-        <p class="lead">FIRMS arşivi veya canlı NRT yüklenir; MODIS↔VIIRS uzay-zamanla eşleşir; aktivite, FRP, kalite ve uyarı aynı konsolda okunur.</p>
+        <div class="kicker">Solution + rule</div>
+        <h2>One map · one calendar · clear thresholds</h2>
+        <p class="lead">Load a FIRMS archive or live NRT; match MODIS↔VIIRS in space–time; read activity, FRP, quality, and alerts in one console.</p>
         <div class="rule">
-          <div class="card"><div class="stat-val">≤ 1 km</div><div class="stat-lbl">Haversine mesafe</div></div>
+          <div class="card"><div class="stat-val">≤ 1 km</div><div class="stat-lbl">Haversine distance</div></div>
           <div class="op">AND</div>
-          <div class="card"><div class="stat-val">≤ 6 sa</div><div class="stat-lbl">|Δ acquisition time|</div></div>
+          <div class="card"><div class="stat-val">≤ 6 h</div><div class="stat-lbl">|Δ acquisition time|</div></div>
         </div>
         <div class="grid">
-          <div class="card"><h3>Matched</h3><p>Her iki koşul da sağlanırsa <strong style="color:var(--teal)">Matched (High Confidence)</strong>. Greedy: her MODIS en yakın kullanılmamış VIIRS’i alır.</p></div>
-          <div class="card"><h3>Quality</h3><p>Matched noktalarda confidence &gt; 80 oranı. VIIRS: h→100, n→50, l→20.</p></div>
-          <div class="card"><h3>Charts exact</h3><p>DuckDB günlük/aylık toplamlar tam; harita mekânsal örnekle akıcı kalır.</p></div>
+          <div class="card"><h3>Matched</h3><p>Both conditions → <strong style="color:var(--teal)">Matched (High Confidence)</strong>. Greedy: each MODIS takes the nearest unused VIIRS.</p></div>
+          <div class="card"><h3>Quality</h3><p>Share of matched points with confidence &gt; 80. VIIRS: h→100, n→50, l→20.</p></div>
+          <div class="card"><h3>Exact charts</h3><p>DuckDB daily/monthly totals are exact; the map stays smooth via spatial sampling.</p></div>
         </div>
         <div class="page">03 / 07</div>
       </section>
 
       <!-- 4 / 7 -->
       <section class="slide" data-i="3">
-        <div class="kicker">Ürün</div>
-        <h2>Jüri masasında tıklanabilir özellikler</h2>
+        <div class="kicker">Product</div>
+        <h2>Clickable features for the judging table</h2>
         <table>
-          <thead><tr><th>Özellik</th><th>Ne gösterir?</th></tr></thead>
+          <thead><tr><th>Feature</th><th>What it shows</th></tr></thead>
           <tbody>
-            <tr><td>Unified map</td><td>Matched · MODIS-only · VIIRS-only — Global’de Natural Earth, bölgede OSM</td></tr>
-            <tr><td>FRP analizi</td><td>Toplam / ortalama Fire Radiative Power; hotspot + FRP dual-axis</td></tr>
-            <tr><td>Aylık trend</td><td>Aylık hotspot + FRP ve bir önceki aya göre % değişim</td></tr>
-            <tr><td>Elevated alert</td><td>Son 7 günde anomali (&gt;2× ortalama) → üst bant uyarısı</td></tr>
-            <tr><td>Bölge + compare</td><td>Preset / yer adı / bbox · aynı bölgede iki tarih aralığı</td></tr>
+            <tr><td>Unified map</td><td>Matched · MODIS-only · VIIRS-only — Natural Earth globally, OSM for regions</td></tr>
+            <tr><td>FRP analysis</td><td>Total / mean Fire Radiative Power; dual-axis hotspot + FRP chart</td></tr>
+            <tr><td>Monthly trend</td><td>Monthly hotspot + FRP with month-over-month % change</td></tr>
+            <tr><td>Elevated alert</td><td>Anomaly in last 7 days (&gt;2× mean) → top banner warning</td></tr>
+            <tr><td>Region + compare</td><td>Preset / place name / bbox · two date ranges on the same area</td></tr>
           </tbody>
         </table>
         <div class="page">04 / 07</div>
@@ -276,36 +266,36 @@
 
       <!-- 5 / 7 -->
       <section class="slide" data-i="4">
-        <div class="kicker">Demo kanıtı</div>
-        <h2>Türkiye · 1–15 Ağustos 2025</h2>
-        <p class="tiny">Kaynak: NASA FIRMS arşivi · DuckDB agregasyonu · uygulama smoke test</p>
+        <div class="kicker">Demo evidence</div>
+        <h2>Türkiye · 1–15 August 2025</h2>
+        <p class="tiny">Source: NASA FIRMS archive · DuckDB aggregation · app smoke test</p>
         <div class="grid">
-          <div class="card"><div class="stat-val">3.318</div><div class="stat-lbl">Hotspot</div></div>
-          <div class="card"><div class="stat-val">49.405</div><div class="stat-lbl">FRP toplam (MW)</div></div>
-          <div class="card"><div class="stat-val">14,89</div><div class="stat-lbl">FRP ortalama (MW)</div></div>
-          <div class="card"><div class="stat-val">13 Ağu</div><div class="stat-lbl">Yoğun / anomali günü</div></div>
+          <div class="card"><div class="stat-val">3,318</div><div class="stat-lbl">Hotspots</div></div>
+          <div class="card"><div class="stat-val">49,405</div><div class="stat-lbl">Total FRP (MW)</div></div>
+          <div class="card"><div class="stat-val">14.89</div><div class="stat-lbl">Mean FRP (MW)</div></div>
+          <div class="card"><div class="stat-val">13 Aug</div><div class="stat-lbl">Peak / anomaly day</div></div>
         </div>
-        <div class="alert">Elevated fire activity detected — son 7 günde anomali bayrağı</div>
+        <div class="alert">Elevated fire activity detected — anomaly flag in the last 7 days</div>
         <div class="page">05 / 07</div>
       </section>
 
       <!-- 6 / 7 -->
       <section class="slide" data-i="5">
-        <div class="kicker">Mimari + etki</div>
-        <h2>Ölçeklenebilir, denetlenebilir, sade</h2>
+        <div class="kicker">Architecture + impact</div>
+        <h2>Scalable, auditable, simple</h2>
         <div class="grid">
           <div class="card"><h3>Ingest</h3><p>FIRMS CSV → Parquet → DuckDB <code>hotspots</code> (+ FRP)</p></div>
-          <div class="card"><h3>Compute</h3><p>Uzay-zaman eşleşme · günlük/aylık SQL · anomali · quality</p></div>
-          <div class="card"><h3>UI</h3><p>Streamlit + Plotly · map fragment · donmayan odak slider</p></div>
+          <div class="card"><h3>Compute</h3><p>Space–time match · daily/monthly SQL · anomaly · quality</p></div>
+          <div class="card"><h3>UI</h3><p>Streamlit + Plotly · map fragment · non-freezing focus slider</p></div>
         </div>
         <div class="two">
           <div class="card">
-            <h3>Sahada</h3>
-            <p>İki uydu ürününü elle birleştirmek yerine adet + FRP’yi tek takvimde okuyun.</p>
+            <h3>In the field</h3>
+            <p>Read counts + FRP on one calendar instead of stitching two satellite products by hand.</p>
           </div>
           <div class="card">
-            <h3>Analizde</h3>
-            <p>Açık eşik, kalite skoru, MoM trend — Global çok yıllı sorguda UI kilitlenmez.</p>
+            <h3>In analysis</h3>
+            <p>Open thresholds, quality score, MoM trend — global multi-year queries without locking the UI.</p>
           </div>
         </div>
         <div class="pills">
@@ -320,28 +310,28 @@
 
       <!-- 7 / 7 -->
       <section class="slide" data-i="6">
-        <div class="kicker">Kapanış</div>
-        <h1>Canlı demoya hazırız</h1>
-        <p class="lead">Uygulama → Turkey / Global → odak slider → FRP ve aylık trendi birlikte okuyun.</p>
+        <div class="kicker">Close</div>
+        <h1>Ready for a live walkthrough</h1>
+        <p class="lead">Open the app → Turkey / Global → focus slider → read FRP and monthly trend together.</p>
         <div class="two">
           <div class="card">
-            <h3>Yakın yol haritası</h3>
+            <h3>Near-term roadmap</h3>
             <ul>
-              <li>Yanık izi / arazi örtüsü katmanları</li>
-              <li>Nöbetçi için kısa brifing çıktısı</li>
-              <li>Zamanlanmış NRT yenileme</li>
+              <li>Burn scar / land-cover layers</li>
+              <li>Short briefing export for duty officers</li>
+              <li>Scheduled NRT refresh</li>
             </ul>
           </div>
           <div class="card">
             <h3>Unified Fire Activity Calendar</h3>
             <p>NASA Space Apps Challenge 2026 · MODIS &amp; VIIRS hotspot harmonization</p>
-            <p class="tiny"><code>streamlit run app.py --server.port 8529</code></p>
-            <p class="tiny">Sunum: <code>presentation/</code> · ← → / Space · F tam ekran</p>
+            <p class="tiny">Source: <code>github.com/egemen01yasin33-maker/modis-viirs-fire-calendar</code></p>
+            <p class="tiny">Demo deck: this page · ← → / Space · F fullscreen</p>
           </div>
         </div>
         <div class="pills">
-          <span class="pill">Teşekkürler</span>
-          <span class="pill">Sorular?</span>
+          <span class="pill">Thank you</span>
+          <span class="pill">Questions?</span>
         </div>
         <div class="page">07 / 07</div>
       </section>
@@ -349,11 +339,11 @@
     </main>
 
     <footer class="footer">
-      <div class="dots" id="dots" aria-label="Slayt seçici"></div>
-      <div class="hint">← → veya boşluk · F tam ekran · 7 slayt</div>
+      <div class="dots" id="dots" aria-label="Slide picker"></div>
+      <div class="hint">← → or Space · F fullscreen · 7 slides</div>
       <div class="nav">
-        <button class="ctrl" id="prev" type="button">Önceki</button>
-        <button class="ctrl" id="next" type="button">Sonraki</button>
+        <button class="ctrl" id="prev" type="button">Prev</button>
+        <button class="ctrl" id="next" type="button">Next</button>
       </div>
     </footer>
   </div>
@@ -367,7 +357,7 @@
       const b = document.createElement("button");
       b.className = "dot" + (idx === 0 ? " on" : "");
       b.type = "button";
-      b.setAttribute("aria-label", "Slayt " + (idx + 1));
+      b.setAttribute("aria-label", "Slide " + (idx + 1));
       b.addEventListener("click", () => go(idx));
       dots.appendChild(b);
     });
