@@ -10,13 +10,11 @@
   <style>
     :root {
       --bg: #070b10;
-      --bg-2: #0e151c;
       --panel: #121a22;
       --ink: #e8f1f4;
       --muted: #8aa0ad;
       --line: #24303a;
       --teal: #00e5d4;
-      --teal-deep: #14919b;
       --cyan: #7df9ff;
       --amber: #fbbf24;
     }
@@ -33,11 +31,7 @@
         radial-gradient(800px 420px at 92% 108%, rgba(20, 145, 155, 0.12), transparent 52%),
         var(--bg);
     }
-    .deck {
-      height: 100%;
-      display: grid;
-      grid-template-rows: 1fr auto;
-    }
+    .deck { height: 100%; display: grid; grid-template-rows: 1fr auto; }
     .slide {
       display: none;
       height: 100%;
@@ -137,13 +131,6 @@
     }
     th { color: var(--cyan); font-weight: 600; }
     td:first-child { color: var(--ink); font-weight: 600; white-space: nowrap; }
-    .alert {
-      border: 1px solid rgba(251, 191, 36, 0.45);
-      background: rgba(251, 191, 36, 0.08);
-      color: var(--amber);
-      padding: 0.75rem 1rem;
-      font-weight: 600;
-    }
     .tiny { font-size: 0.85rem; color: var(--muted); }
     .page {
       justify-self: end;
@@ -179,11 +166,9 @@
       font: inherit;
     }
     .ctrl:disabled { opacity: 0.35; cursor: default; }
-    code {
-      font-size: 0.88em;
-      color: var(--cyan);
-    }
+    code { font-size: 0.88em; color: var(--cyan); }
     strong { color: var(--ink); }
+    a { color: var(--cyan); }
   </style>
 </head>
 <body>
@@ -194,16 +179,19 @@
       <section class="slide active" data-i="0">
         <div class="kicker">NASA Space Apps Challenge 2026</div>
         <div class="brand">Unified Fire Activity Calendar</div>
-        <p class="lead">An operational panel that merges MODIS and VIIRS fire hotspots into one map and one calendar — counts, FRP, quality, and alerts on a single screen.</p>
+        <p class="lead">
+          One panel that harmonizes MODIS and VIIRS fire hotspots into a single
+          point map, activity chart, and FRP view — for any window in 2023–2026.
+        </p>
         <div class="pills">
           <span class="pill">Hotspot harmonization</span>
-          <span class="pill">FIRMS Archive + NRT</span>
-          <span class="pill">FRP · Quality · Alerts</span>
+          <span class="pill">FIRMS Archive 2023–2026</span>
+          <span class="pill">FRP · Point map · Compare</span>
         </div>
         <div class="grid" style="margin-top:0.6rem">
           <div class="card"><div class="stat-val">1 km</div><div class="stat-lbl">Match distance</div></div>
           <div class="card"><div class="stat-val">±6 h</div><div class="stat-lbl">Time window</div></div>
-          <div class="card"><div class="stat-val">115M+</div><div class="stat-lbl">Indexed archive detections</div></div>
+          <div class="card"><div class="stat-val">3 yrs+</div><div class="stat-lbl">Archive coverage</div></div>
         </div>
         <div class="page">01 / 07</div>
       </section>
@@ -214,16 +202,16 @@
         <h2>Same fire, two sensors, fragmented truth</h2>
         <div class="two">
           <div>
-            <p class="lead">MODIS and VIIRS see the same landscape with different resolution, confidence, and overpass times. There is no shared answer to “how intense was this week?”</p>
+            <p class="lead">MODIS and VIIRS see the same landscape with different resolution, confidence, and overpass times.</p>
             <ul>
               <li>Double-counting or missed co-detections</li>
-              <li>Multi-year global archives freeze the UI or erase sparse regions</li>
-              <li>Hotspot counts and energy (FRP) rarely appear on one panel</li>
+              <li>No shared answer to “how intense was this week?”</li>
+              <li>Counts and energy (FRP) rarely share one screen</li>
             </ul>
           </div>
           <div class="card">
             <h3>Who is it for?</h3>
-            <p>Fire managers, disaster coordinators, researchers, and local teams working with open FIRMS data.</p>
+            <p>Fire managers, disaster coordinators, researchers, and local teams using open NASA FIRMS data.</p>
           </div>
         </div>
         <div class="page">02 / 07</div>
@@ -233,16 +221,16 @@
       <section class="slide" data-i="2">
         <div class="kicker">Solution + rule</div>
         <h2>One map · one calendar · clear thresholds</h2>
-        <p class="lead">Load a FIRMS archive or live NRT; match MODIS↔VIIRS in space–time; read activity, FRP, quality, and alerts in one console.</p>
+        <p class="lead">Pick a region and date window. Match MODIS↔VIIRS in space–time. Read points, activity, and FRP together.</p>
         <div class="rule">
           <div class="card"><div class="stat-val">≤ 1 km</div><div class="stat-lbl">Haversine distance</div></div>
           <div class="op">AND</div>
           <div class="card"><div class="stat-val">≤ 6 h</div><div class="stat-lbl">|Δ acquisition time|</div></div>
         </div>
         <div class="grid">
-          <div class="card"><h3>Matched</h3><p>Both conditions → <strong style="color:var(--teal)">Matched (High Confidence)</strong>. Greedy: each MODIS takes the nearest unused VIIRS.</p></div>
-          <div class="card"><h3>Quality</h3><p>Share of matched points with confidence &gt; 80. VIIRS: h→100, n→50, l→20.</p></div>
-          <div class="card"><h3>Exact charts</h3><p>DuckDB daily/monthly totals are exact; the map stays smooth via spatial sampling.</p></div>
+          <div class="card"><h3>Matched</h3><p>Both conditions → <strong style="color:var(--teal)">Matched (High Confidence)</strong>.</p></div>
+          <div class="card"><h3>Point map</h3><p>Every detection as a colored point — Matched · MODIS-only · VIIRS-only.</p></div>
+          <div class="card"><h3>FRP</h3><p>Fire Radiative Power (MW) on a dual-axis chart and in point popups.</p></div>
         </div>
         <div class="page">03 / 07</div>
       </section>
@@ -250,15 +238,16 @@
       <!-- 4 / 7 -->
       <section class="slide" data-i="3">
         <div class="kicker">Product</div>
-        <h2>Clickable features for the judging table</h2>
+        <h2>What judges can click today</h2>
         <table>
           <thead><tr><th>Feature</th><th>What it shows</th></tr></thead>
           <tbody>
-            <tr><td>Unified map</td><td>Matched · MODIS-only · VIIRS-only — Natural Earth globally, OSM for regions</td></tr>
-            <tr><td>FRP analysis</td><td>Total / mean Fire Radiative Power; dual-axis hotspot + FRP chart</td></tr>
-            <tr><td>Monthly trend</td><td>Monthly hotspot + FRP with month-over-month % change</td></tr>
-            <tr><td>Elevated alert</td><td>Anomaly in last 7 days (&gt;2× mean) → top banner warning</td></tr>
-            <tr><td>Region + compare</td><td>Preset / place name / bbox · two date ranges on the same area</td></tr>
+            <tr><td>Point map</td><td>Leaflet dots sized by FRP — click for category, FRP, coordinates</td></tr>
+            <tr><td>Archive dates</td><td>2023-01-01 → 2026-11-15 with year chips and period compare</td></tr>
+            <tr><td>Regions</td><td>Turkey, Aegean, Mediterranean, California, Amazon, Global…</td></tr>
+            <tr><td>Custom bbox</td><td>West / South / East / North coordinates</td></tr>
+            <tr><td>FRP chart</td><td>Hotspot counts + daily FRP (MW) on one dual-axis plot</td></tr>
+            <tr><td>Live NRT</td><td>Optional gated FIRMS NRT when dates are recent</td></tr>
           </tbody>
         </table>
         <div class="page">04 / 07</div>
@@ -267,42 +256,42 @@
       <!-- 5 / 7 -->
       <section class="slide" data-i="4">
         <div class="kicker">Demo evidence</div>
-        <h2>Türkiye · 1–15 August 2025</h2>
-        <p class="tiny">Source: NASA FIRMS archive · DuckDB aggregation · app smoke test</p>
+        <h2>Turkey · July 2024 (archive)</h2>
+        <p class="tiny">Source: NASA FIRMS MODIS + VIIRS archive · FastAPI demo smoke test</p>
         <div class="grid">
-          <div class="card"><div class="stat-val">3,318</div><div class="stat-lbl">Hotspots</div></div>
-          <div class="card"><div class="stat-val">49,405</div><div class="stat-lbl">Total FRP (MW)</div></div>
-          <div class="card"><div class="stat-val">14.89</div><div class="stat-lbl">Mean FRP (MW)</div></div>
-          <div class="card"><div class="stat-val">13 Aug</div><div class="stat-lbl">Peak / anomaly day</div></div>
+          <div class="card"><div class="stat-val">~12k</div><div class="stat-lbl">Hotspots in window</div></div>
+          <div class="card"><div class="stat-val">Point map</div><div class="stat-lbl">Up to 3,000 plotted dots</div></div>
+          <div class="card"><div class="stat-val">FRP</div><div class="stat-lbl">Daily MW on chart + popup</div></div>
+          <div class="card"><div class="stat-val">Compare</div><div class="stat-lbl">vs July 2023 side-by-side</div></div>
         </div>
-        <div class="alert">Elevated fire activity detected — anomaly flag in the last 7 days</div>
+        <p class="lead" style="margin-top:0.4rem">Pick <strong>2024</strong> → <strong>Turkey</strong> → Run. Zoom the point cloud; open a dot for FRP.</p>
         <div class="page">05 / 07</div>
       </section>
 
       <!-- 6 / 7 -->
       <section class="slide" data-i="5">
         <div class="kicker">Architecture + impact</div>
-        <h2>Scalable, auditable, simple</h2>
+        <h2>Fast to open · exact to count</h2>
         <div class="grid">
-          <div class="card"><h3>Ingest</h3><p>FIRMS CSV → Parquet → DuckDB <code>hotspots</code> (+ FRP)</p></div>
-          <div class="card"><h3>Compute</h3><p>Space–time match · daily/monthly SQL · anomaly · quality</p></div>
-          <div class="card"><h3>UI</h3><p>Streamlit + Plotly · map fragment · non-freezing focus slider</p></div>
+          <div class="card"><h3>Ingest</h3><p>FIRMS CSV → Parquet / DuckDB (+ bundled regional extracts for hosting)</p></div>
+          <div class="card"><h3>Compute</h3><p>1 km · ±6 h match · daily totals · FRP sums</p></div>
+          <div class="card"><h3>UI</h3><p>FastAPI + Leaflet point map + Chart.js (no WebSockets required)</p></div>
         </div>
         <div class="two">
           <div class="card">
             <h3>In the field</h3>
-            <p>Read counts + FRP on one calendar instead of stitching two satellite products by hand.</p>
+            <p>See fires as points on one map instead of stitching two satellite CSVs by hand.</p>
           </div>
           <div class="card">
             <h3>In analysis</h3>
-            <p>Open thresholds, quality score, MoM trend — global multi-year queries without locking the UI.</p>
+            <p>Compare seasons, read FRP intensity, keep open thresholds for auditability.</p>
           </div>
         </div>
         <div class="pills">
           <span class="pill">Python</span>
+          <span class="pill">FastAPI</span>
           <span class="pill">DuckDB</span>
-          <span class="pill">Plotly</span>
-          <span class="pill">Streamlit</span>
+          <span class="pill">Leaflet</span>
           <span class="pill">NASA FIRMS</span>
         </div>
         <div class="page">06 / 07</div>
@@ -312,21 +301,20 @@
       <section class="slide" data-i="6">
         <div class="kicker">Close</div>
         <h1>Ready for a live walkthrough</h1>
-        <p class="lead">Open the app → Turkey / Global → focus slider → read FRP and monthly trend together.</p>
+        <p class="lead">Open the app → Turkey → year chip → watch hotspot points and FRP update together.</p>
         <div class="two">
           <div class="card">
-            <h3>Near-term roadmap</h3>
+            <h3>Links</h3>
             <ul>
-              <li>Burn scar / land-cover layers</li>
-              <li>Short briefing export for duty officers</li>
-              <li>Scheduled NRT refresh</li>
+              <li>Source: <code>github.com/egemen01yasin33-maker/modis-viirs-fire-calendar</code></li>
+              <li>Pitch deck: this page (← → / Space · F fullscreen)</li>
+              <li>Live app: Cursor Publish / tunnel URL from the team</li>
             </ul>
           </div>
           <div class="card">
             <h3>Unified Fire Activity Calendar</h3>
             <p>NASA Space Apps Challenge 2026 · MODIS &amp; VIIRS hotspot harmonization</p>
-            <p class="tiny">Source: <code>github.com/egemen01yasin33-maker/modis-viirs-fire-calendar</code></p>
-            <p class="tiny">Demo deck: this page · ← → / Space · F fullscreen</p>
+            <p class="tiny">Data: NASA FIRMS Archive &amp; NRT</p>
           </div>
         </div>
         <div class="pills">
@@ -340,7 +328,7 @@
 
     <footer class="footer">
       <div class="dots" id="dots" aria-label="Slide picker"></div>
-      <div class="hint">← → or Space · F fullscreen · 7 slides</div>
+      <div class="hint">← → or Space · F fullscreen · 7 slides · English</div>
       <div class="nav">
         <button class="ctrl" id="prev" type="button">Prev</button>
         <button class="ctrl" id="next" type="button">Next</button>
