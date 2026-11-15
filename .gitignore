@@ -15,3 +15,4 @@ data/*
 !data/README.md
 !data/sample_firms.csv
 !data/archive_manifest.json
+_publish_src/
