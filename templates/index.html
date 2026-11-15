@@ -4,9 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Unified Fire Activity Calendar</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
   <style>
     :root {
       --bg: #070b10;
@@ -16,52 +14,40 @@
       --line: #24303a;
       --teal: #00e5d4;
       --cyan: #7df9ff;
-      --amber: #fbbf24;
-      --danger: #ff6b6b;
     }
     * { box-sizing: border-box; }
     body {
       margin: 0;
       min-height: 100vh;
       color: var(--ink);
-      font-family: "IBM Plex Sans", system-ui, sans-serif;
+      font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
       background:
-        radial-gradient(1000px 480px at 10% -10%, rgba(0, 229, 212, 0.12), transparent 55%),
-        radial-gradient(800px 420px at 100% 100%, rgba(20, 145, 155, 0.1), transparent 50%),
+        radial-gradient(900px 420px at 8% -8%, rgba(0, 229, 212, 0.1), transparent 55%),
         var(--bg);
     }
-    .wrap { max-width: 1120px; margin: 0 auto; padding: 1.5rem 1.2rem 3rem; }
+    .wrap { max-width: 1040px; margin: 0 auto; padding: 1.1rem 1rem 2.5rem; }
     .brand {
-      font-family: Syne, sans-serif;
       font-weight: 800;
-      font-size: clamp(1.8rem, 4vw, 2.8rem);
+      font-size: clamp(1.6rem, 3.8vw, 2.4rem);
       letter-spacing: -0.02em;
-      background: linear-gradient(120deg, var(--ink) 20%, var(--teal) 70%, var(--cyan));
-      -webkit-background-clip: text;
-      background-clip: text;
-      color: transparent;
-      margin: 0 0 0.35rem;
+      color: var(--teal);
+      margin: 0 0 0.3rem;
     }
-    .lead { color: var(--muted); max-width: 42rem; margin: 0 0 1.4rem; line-height: 1.5; }
+    .lead { color: var(--muted); max-width: 40rem; margin: 0 0 1rem; line-height: 1.45; font-size: 0.95rem; }
     .panel {
       background: var(--panel);
       border: 1px solid var(--line);
-      padding: 1rem 1.1rem;
-      margin-bottom: 1rem;
+      padding: 0.85rem 1rem;
+      margin-bottom: 0.85rem;
     }
-    .row {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 0.75rem 1rem;
-      align-items: end;
-    }
-    label { display: grid; gap: 0.3rem; font-size: 0.82rem; color: var(--muted); }
+    .row { display: flex; flex-wrap: wrap; gap: 0.65rem 0.85rem; align-items: end; }
+    label { display: grid; gap: 0.25rem; font-size: 0.78rem; color: var(--muted); }
     select, input[type="number"] {
       background: #0a1016;
       border: 1px solid var(--line);
       color: var(--ink);
-      padding: 0.5rem 0.65rem;
-      min-width: 10rem;
+      padding: 0.45rem 0.55rem;
+      min-width: 9rem;
       font: inherit;
     }
     .btn {
@@ -69,56 +55,38 @@
       color: #041016;
       border: 0;
       font-weight: 700;
-      font-family: Syne, sans-serif;
-      padding: 0.55rem 1rem;
+      padding: 0.5rem 0.9rem;
       cursor: pointer;
-    }
-    .btn.secondary {
-      background: transparent;
-      color: var(--cyan);
-      border: 1px solid var(--line);
     }
     .stats {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-      gap: 0.65rem;
-      margin: 1rem 0;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 0.5rem;
+      margin: 0.75rem 0;
     }
+    @media (max-width: 640px) { .stats { grid-template-columns: repeat(2, 1fr); } }
     .stat {
       background: #0a1016;
       border: 1px solid var(--line);
-      padding: 0.75rem 0.85rem;
+      padding: 0.6rem 0.7rem;
     }
-    .stat b {
-      display: block;
-      font-family: Syne, sans-serif;
-      font-size: 1.35rem;
-      color: var(--teal);
-    }
-    .stat span { font-size: 0.78rem; color: var(--muted); }
+    .stat b { display: block; font-size: 1.25rem; color: var(--teal); }
+    .stat span { font-size: 0.72rem; color: var(--muted); }
     .error {
       border: 1px solid rgba(255, 107, 107, 0.45);
       background: rgba(255, 107, 107, 0.08);
       color: #ffb4b4;
-      padding: 0.75rem 1rem;
-      margin-bottom: 1rem;
+      padding: 0.65rem 0.85rem;
+      margin-bottom: 0.85rem;
+      font-size: 0.9rem;
     }
-    .source { color: var(--cyan); font-size: 0.9rem; margin: 0.4rem 0 1rem; }
-    h2 {
-      font-family: Syne, sans-serif;
-      font-size: 1.15rem;
-      margin: 1.4rem 0 0.6rem;
-    }
-    .map-frame {
-      border: 1px solid var(--line);
-      overflow: hidden;
-      min-height: 420px;
-      background: #0a1016;
-    }
-    .map-frame iframe, .map-frame .folium-map { width: 100% !important; }
-    .legend { display: flex; flex-wrap: wrap; gap: 0.75rem; margin: 0.5rem 0 1rem; font-size: 0.85rem; color: var(--muted); }
-    .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; margin-right: 0.35rem; }
-    .foot { margin-top: 2rem; color: var(--muted); font-size: 0.8rem; }
+    .source { color: var(--cyan); font-size: 0.85rem; margin: 0.25rem 0 0.75rem; }
+    h2 { font-size: 1rem; margin: 1rem 0 0.45rem; }
+    #map { height: 380px; width: 100%; background: #0a1016; border: 1px solid var(--line); }
+    #chart-wrap { height: 260px; position: relative; }
+    .legend { display: flex; flex-wrap: wrap; gap: 0.7rem; margin: 0.35rem 0 0.6rem; font-size: 0.8rem; color: var(--muted); }
+    .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; margin-right: 0.3rem; }
+    .foot { margin-top: 1.5rem; color: var(--muted); font-size: 0.75rem; }
     a { color: var(--cyan); }
   </style>
 </head>
@@ -126,17 +94,16 @@
   <div class="wrap">
     <h1 class="brand">Unified Fire Activity Calendar</h1>
     <p class="lead">
-      Harmonize MODIS and VIIRS hotspots (1&nbsp;km · ±6&nbsp;h) into one map and activity chart.
-      NASA Space Apps 2026 — FIRMS data.
+      Harmonize MODIS and VIIRS hotspots (1&nbsp;km · ±6&nbsp;h). NASA Space Apps 2026 — FIRMS data.
     </p>
 
     <form class="panel" method="post" action="/run">
       <div class="row">
         <label>Mode
           <select name="mode">
-            <option value="sample" {% if mode == 'sample' %}selected{% endif %}>Sample demo CSV</option>
+            <option value="sample" {% if mode == 'sample' %}selected{% endif %}>Sample demo</option>
             <option value="nrt" {% if mode == 'nrt' %}selected{% endif %} {% if not has_key %}disabled{% endif %}>
-              Live FIRMS NRT{% if not has_key %} (key not set){% endif %}
+              Live NRT{% if not has_key %} (no key){% endif %}
             </option>
           </select>
         </label>
@@ -147,10 +114,10 @@
             {% endfor %}
           </select>
         </label>
-        <label>NRT days (1–{{ max_days }})
+        <label>NRT days
           <input type="number" name="days" min="1" max="{{ max_days }}" value="{{ days }}" />
         </label>
-        <button class="btn" type="submit">Run harmonization</button>
+        <button class="btn" type="submit">Run</button>
       </div>
     </form>
 
@@ -166,7 +133,6 @@
       <div class="stat"><b>{{ result.summary.get('viirs_only', 0) }}</b><span>VIIRS-only</span></div>
       <div class="stat"><b>{{ result.summary.get('total', result.rows) }}</b><span>Total</span></div>
     </div>
-
     <div class="legend">
       <span><i class="dot" style="background:#00e5d4"></i>Matched</span>
       <span><i class="dot" style="background:#14919b"></i>MODIS-only</span>
@@ -174,19 +140,75 @@
     </div>
 
     <h2>Activity</h2>
-    <div class="panel">{{ result.chart_html | safe }}</div>
+    <div class="panel"><div id="chart-wrap"><canvas id="chart"></canvas></div></div>
 
     <h2>Map</h2>
-    <div class="map-frame">{{ result.map_html | safe }}</div>
+    <div id="map"></div>
+
+    <script type="application/json" id="points-data">{{ result.points_json | safe }}</script>
+    <script type="application/json" id="series-data">{{ result.series_json | safe }}</script>
+    <script type="application/json" id="map-meta">{{ {"center": result.map_center, "zoom": result.map_zoom} | tojson }}</script>
     {% endif %}
 
     <p class="foot">
-      Source:
       <a href="https://github.com/egemen01yasin33-maker/modis-viirs-fire-calendar">GitHub</a>
-      · Pitch:
-      <a href="https://egemen01yasin33-maker.github.io/modis-viirs-fire-calendar/">Space Apps deck</a>
-      · Data: NASA FIRMS
+      · <a href="https://egemen01yasin33-maker.github.io/modis-viirs-fire-calendar/">Pitch deck</a>
+      · NASA FIRMS
     </p>
   </div>
+
+  {% if result %}
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin="" defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" defer></script>
+  <script>
+    document.addEventListener("DOMContentLoaded", () => {
+      const points = JSON.parse(document.getElementById("points-data").textContent);
+      const series = JSON.parse(document.getElementById("series-data").textContent);
+      const meta = JSON.parse(document.getElementById("map-meta").textContent);
+
+      const ctx = document.getElementById("chart");
+      if (ctx && window.Chart) {
+        new Chart(ctx, {
+          type: "line",
+          data: {
+            labels: series.labels,
+            datasets: [
+              { label: "Matched", data: series.matched, borderColor: series.colors.matched, tension: 0.2, pointRadius: 2 },
+              { label: "MODIS-only", data: series.modis, borderColor: series.colors.modis, tension: 0.2, pointRadius: 2 },
+              { label: "VIIRS-only", data: series.viirs, borderColor: series.colors.viirs, tension: 0.2, pointRadius: 2 },
+            ],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { labels: { color: "#8aa0ad" } } },
+            scales: {
+              x: { ticks: { color: "#8aa0ad", maxTicksLimit: 8 }, grid: { color: "#24303a" } },
+              y: { ticks: { color: "#8aa0ad" }, grid: { color: "#24303a" } },
+            },
+          },
+        });
+      }
+
+      if (window.L) {
+        const map = L.map("map", { scrollWheelZoom: false }).setView(meta.center, meta.zoom);
+        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+          maxZoom: 18,
+          attribution: "&copy; OpenStreetMap",
+        }).addTo(map);
+        for (const p of points) {
+          L.circleMarker([p.lat, p.lon], {
+            radius: 5,
+            color: p.color,
+            fillColor: p.color,
+            fillOpacity: 0.85,
+            weight: 1,
+          }).addTo(map).bindPopup(p.c);
+        }
+        setTimeout(() => map.invalidateSize(), 50);
+      }
+    });
+  </script>
+  {% endif %}
 </body>
 </html>

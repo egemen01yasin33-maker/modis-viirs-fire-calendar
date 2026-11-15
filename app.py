@@ -9,19 +9,19 @@ Hosted / ASGI:               uvicorn app:app --host 0.0.0.0 --port ${PORT:-8529}
 
 from __future__ import annotations
 
+import json
 import os
 import time
+from contextlib import asynccontextmanager
 from datetime import date, timedelta
+from functools import lru_cache
 from pathlib import Path
 
-import folium
 import pandas as pd
-import plotly.graph_objects as go
 from dotenv import load_dotenv
 from fastapi import FastAPI, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
-from folium.plugins import MarkerCluster
 
 from src.firms_api import (
     AVAILABLE_SENSORS,
@@ -47,13 +47,23 @@ load_dotenv(ROOT / ".env")
 TEMPLATES = Jinja2Templates(directory=str(ROOT / "templates"))
 SAMPLE_CSV = ROOT / "data" / "sample_firms.csv"
 
-# Simple process-wide rate limit for public FIRMS use of the host key
 _NRT_HITS: list[float] = []
 _NRT_MAX_PER_HOUR = 30
 _NRT_MIN_GAP_SEC = 8.0
+_MAP_POINT_CAP = 400
 
-app = FastAPI(title="Unified Fire Activity Calendar")
-# Cursor publish also looks for these aliases
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    # Warm sample pipeline once at boot so the first visitor is fast
+    try:
+        cached_sample_result()
+    except Exception:  # noqa: BLE001
+        pass
+    yield
+
+
+app = FastAPI(title="Unified Fire Activity Calendar", lifespan=_lifespan)
 application = app
 handler = app
 
@@ -64,7 +74,6 @@ def _firms_key() -> str:
 
 def _nrt_allowed() -> tuple[bool, str]:
     now = time.monotonic()
-    # prune
     while _NRT_HITS and now - _NRT_HITS[0] > 3600:
         _NRT_HITS.pop(0)
     if len(_NRT_HITS) >= _NRT_MAX_PER_HOUR:
@@ -79,69 +88,59 @@ def _record_nrt() -> None:
     _NRT_HITS.append(time.monotonic())
 
 
+@lru_cache(maxsize=1)
 def _load_sample() -> pd.DataFrame:
     if not SAMPLE_CSV.is_file():
         return pd.DataFrame()
     return pd.read_csv(SAMPLE_CSV)
 
 
-def _build_map(df: pd.DataFrame) -> str:
+def _points_json(df: pd.DataFrame) -> str:
     if df.empty:
-        m = folium.Map(location=[38.0, 35.0], zoom_start=5, tiles="OpenStreetMap")
-        return m._repr_html_()
-
-    lat0 = float(df["latitude"].mean())
-    lon0 = float(df["longitude"].mean())
-    # OpenStreetMap tiles — no third-party API key required on public demos
-    m = folium.Map(location=[lat0, lon0], zoom_start=6, tiles="OpenStreetMap")
-    cluster = MarkerCluster().add_to(m)
-    for _, row in df.iterrows():
-        cat = str(row.get("category") or "")
-        color = CATEGORY_COLORS.get(cat, "#88aabb")
-        folium.CircleMarker(
-            location=[float(row["latitude"]), float(row["longitude"])],
-            radius=5,
-            color=color,
-            fill=True,
-            fill_color=color,
-            fill_opacity=0.85,
-            popup=folium.Popup(
-                f"<b>{cat}</b><br>{row.get('acq_date', '')} {row.get('acq_time', '')}",
-                max_width=220,
-            ),
-        ).add_to(cluster)
-    return m._repr_html_()
+        return "[]"
+    work = df
+    if len(work) > _MAP_POINT_CAP:
+        work = work.nlargest(_MAP_POINT_CAP, "frp") if "frp" in work.columns else work.head(
+            _MAP_POINT_CAP
+        )
+    pts = []
+    for row in work.itertuples(index=False):
+        cat = str(getattr(row, "category", "") or "")
+        pts.append(
+            {
+                "lat": float(row.latitude),
+                "lon": float(row.longitude),
+                "c": cat,
+                "color": CATEGORY_COLORS.get(cat, "#88aabb"),
+            }
+        )
+    return json.dumps(pts, separators=(",", ":"))
 
 
-def _build_chart(series: pd.DataFrame) -> str:
+def _series_json(series: pd.DataFrame) -> str:
     if series is None or series.empty:
-        return "<p class='muted'>No activity series.</p>"
-    fig = go.Figure()
-    x = series["period"].astype(str)
-    for col, label in (
-        (MATCHED, "Matched"),
-        (MODIS_ONLY, "MODIS-only"),
-        (VIIRS_ONLY, "VIIRS-only"),
-    ):
-        if col in series.columns:
-            fig.add_trace(
-                go.Scatter(
-                    x=x,
-                    y=series[col],
-                    name=label,
-                    line=dict(color=CATEGORY_COLORS[col], width=2),
-                )
-            )
-    fig.update_layout(
-        template="plotly_dark",
-        paper_bgcolor="#070b10",
-        plot_bgcolor="#0e151c",
-        margin=dict(l=40, r=20, t=30, b=40),
-        legend=dict(orientation="h", y=1.12),
-        height=360,
-        font=dict(color="#e8f1f4"),
+        return json.dumps({"labels": [], "matched": [], "modis": [], "viirs": []})
+    labels = [str(p)[:10] for p in series["period"].tolist()]
+
+    def _col(name: str) -> list[int]:
+        if name not in series.columns:
+            return [0] * len(labels)
+        return [int(x) for x in series[name].tolist()]
+
+    return json.dumps(
+        {
+            "labels": labels,
+            "matched": _col(MATCHED),
+            "modis": _col(MODIS_ONLY),
+            "viirs": _col(VIIRS_ONLY),
+            "colors": {
+                "matched": CATEGORY_COLORS[MATCHED],
+                "modis": CATEGORY_COLORS[MODIS_ONLY],
+                "viirs": CATEGORY_COLORS[VIIRS_ONLY],
+            },
+        },
+        separators=(",", ":"),
     )
-    return fig.to_html(full_html=False, include_plotlyjs="cdn")
 
 
 def _run_pipeline(raw: pd.DataFrame) -> dict:
@@ -151,14 +150,26 @@ def _run_pipeline(raw: pd.DataFrame) -> dict:
     harm = harmonize_hotspots(raw)
     summary = summarize_categories(harm)
     series = activity_timeseries(harm)
+    lat0 = float(harm["latitude"].mean()) if not harm.empty else 38.0
+    lon0 = float(harm["longitude"].mean()) if not harm.empty else 35.0
     return {
-        "harmonized": harm,
         "summary": summary,
-        "series": series,
-        "map_html": _build_map(harm),
-        "chart_html": _build_chart(series),
         "rows": int(len(harm)),
+        "points_json": _points_json(harm),
+        "series_json": _series_json(series),
+        "map_center": [lat0, lon0],
+        "map_zoom": 6 if not harm.empty else 5,
     }
+
+
+@lru_cache(maxsize=1)
+def cached_sample_result() -> dict:
+    raw = _load_sample()
+    if raw.empty:
+        raise ValueError("Sample FIRMS CSV missing from data/sample_firms.csv.")
+    result = _run_pipeline(raw)
+    result["source_label"] = "Sample FIRMS CSV (bundled demo)"
+    return result
 
 
 def _page_context(
@@ -170,7 +181,6 @@ def _page_context(
     region: str = "Turkey",
     days: int = 5,
 ) -> dict:
-    today = date.today()
     return {
         "request": request,
         "presets": list(PRESET_REGIONS.keys()),
@@ -180,7 +190,6 @@ def _page_context(
         "mode": mode,
         "error": error,
         "result": result,
-        "today": today.isoformat(),
         "max_days": MAX_DAY_RANGE,
     }
 
@@ -190,12 +199,7 @@ async def home(request: Request) -> HTMLResponse:
     error = None
     result = None
     try:
-        raw = _load_sample()
-        if raw.empty:
-            error = "Sample FIRMS CSV missing from data/sample_firms.csv."
-        else:
-            result = _run_pipeline(raw)
-            result["source_label"] = "Sample FIRMS CSV (bundled demo)"
+        result = cached_sample_result()
     except Exception as exc:  # noqa: BLE001
         error = str(exc)
     ctx = _page_context(request, result=result, error=error, mode="sample")
@@ -240,11 +244,7 @@ async def run(
                 f"Live FIRMS NRT · {region} · {start.isoformat()} → {end.isoformat()}"
             )
         else:
-            raw = _load_sample()
-            if raw.empty:
-                raise ValueError("Sample FIRMS CSV missing.")
-            result = _run_pipeline(raw)
-            result["source_label"] = "Sample FIRMS CSV (bundled demo)"
+            result = cached_sample_result()
     except (FirmsApiError, ValueError) as exc:
         error = str(exc)
     except Exception as exc:  # noqa: BLE001
