@@ -42,6 +42,7 @@ from src.archive_csv import (
     peek_archive_date_bounds,
     save_uploaded_csvs,
 )
+from src.archive_restore import missing_archives, restore_archives
 from src.firms_api import (
     AVAILABLE_SENSORS,
     PRESET_REGIONS,
@@ -2247,21 +2248,48 @@ def main() -> None:
 
     if not has_archive and not has_nrt:
         st.warning(
-            "No fire archive found. Put CSVs in `data/` "
-            "(live NRT also needs FIRMS_MAP_KEY in the environment)."
+            "No fire archive found. Restore the full set from Drive, "
+            "or set FIRMS_MAP_KEY for live NRT only."
         )
         st.info(
-            "Large archives (multi-GB) are **not stored in git** and do not survive "
-            "a fresh cloud machine. Copy FIRMS Archive `*.csv` into "
-            f"**`{DATA_PATH}`**, then refresh. "
-            f"Browser upload is only for small files "
-            f"({MAX_UPLOAD_BYTES // (1024 * 1024)} MiB × {MAX_UPLOAD_FILES})."
+            "The **full** MODIS + VIIRS archive (~6.5 GB) is not in git. "
+            "Use **Restore full archives from Drive** once — Drive links must "
+            "stay as Anyone-with-the-link. Local files already present are kept."
         )
-        with st.expander("Add archive files (browser)", expanded=True):
+        try:
+            need = missing_archives(DATA_PATH)
+        except ArchiveCsvError:
+            need = []
+        if need:
+            st.caption(f"{len(need)} archive file(s) missing from `{DATA_PATH}`.")
+        if st.button(
+            "Restore full archives from Drive",
+            type="primary",
+            key="restore_full_archives",
+        ):
+            with st.spinner(
+                "Downloading full archive set from Drive (~6.5 GB). "
+                "This can take several minutes…"
+            ):
+                try:
+                    saved = restore_archives(DATA_PATH, only_missing=True)
+                except ArchiveCsvError as exc:
+                    st.error(str(exc))
+                    return
+            st.success(f"Ready: {len(saved)} archive file(s). Building index…")
+            try:
+                ensure_hotspots_db(DATA_PATH)
+            except ArchiveCsvError as exc:
+                st.warning(str(exc))
+            st.session_state._archive_mtimes = None
+            load_archive_slice.clear()
+            load_map_slice.clear()
+            st.rerun()
+        with st.expander("Add archive files (browser)", expanded=False):
             st.caption(
-                f"Up to {MAX_UPLOAD_FILES} CSV files, "
-                f"{MAX_UPLOAD_BYTES // (1024 * 1024)} MiB each. "
-                "Saved only for this browser session under data/_uploads/."
+                f"Only for small files "
+                f"({MAX_UPLOAD_BYTES // (1024 * 1024)} MiB × {MAX_UPLOAD_FILES}). "
+                "Full archives should use Drive restore above."
             )
             uploads = st.file_uploader(
                 "Upload CSV",

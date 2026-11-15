@@ -9,8 +9,9 @@ venv/
 .pytest_cache/
 .mypy_cache/
 
-# Keep sample + docs; ignore large user-dropped archive CSVs
+# Keep sample + docs + restore manifest; ignore large user-dropped archive CSVs
 data/*
 !data/.gitkeep
 !data/README.md
 !data/sample_firms.csv
+!data/archive_manifest.json

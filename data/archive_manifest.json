@@ -1,0 +1,53 @@
+{
+  "description": "Full FIRMS archive set for Unified Fire Activity Calendar (MODIS + VIIRS). Keep Drive links as Anyone-with-the-link so cloud/publish can restore without re-uploading.",
+  "files": [
+    {
+      "name": "fire_archive_J2V-C2_848749.csv",
+      "drive_id": "19BDhdEStKxL5yCBspm35gzPgw5yyl06K",
+      "approx_bytes": 1431252771,
+      "sensor": "VIIRS NOAA-21"
+    },
+    {
+      "name": "fire_archive_J2V-C2_848764.csv",
+      "drive_id": "12funsGEo1CGfDX9sDe4VmwDqCMBr7nhF",
+      "approx_bytes": 739137126,
+      "sensor": "VIIRS NOAA-21"
+    },
+    {
+      "name": "fire_archive_J2V-C2_850947.csv",
+      "drive_id": "1v9zo520g-NxffjsMEjhGQwXlT1ay1Aob",
+      "approx_bytes": 1762211227,
+      "sensor": "VIIRS NOAA-21"
+    },
+    {
+      "name": "fire_archive_J2V-C2_850948.csv",
+      "drive_id": "10YTYRp2E4keJYK72MyP7OQrmVDc5fL0k",
+      "approx_bytes": 1473068484,
+      "sensor": "VIIRS NOAA-21"
+    },
+    {
+      "name": "fire_archive_M-C61_851028.csv",
+      "drive_id": "1yslvqnYdhTzZFMFpyFLpAczzzCpai749",
+      "approx_bytes": 375000000,
+      "sensor": "MODIS"
+    },
+    {
+      "name": "fire_archive_M-C61_851029.csv",
+      "drive_id": "1ja6g0HoXr8v7couoHcPbkpDclctmEFKG",
+      "approx_bytes": 389000000,
+      "sensor": "MODIS"
+    },
+    {
+      "name": "fire_archive_M-C61_851030.csv",
+      "drive_id": "1K4lcrRxwGzq9OabviZVbsI40hRSB8qwC",
+      "approx_bytes": 296000000,
+      "sensor": "MODIS"
+    },
+    {
+      "name": "fire_nrt_M-C61_851031.csv",
+      "drive_id": "1-ldLzxKKvEjnOwg5EbEadGTl16MSK3S4",
+      "approx_bytes": 69900000,
+      "sensor": "MODIS NRT"
+    }
+  ]
+}
