@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Unified Fire Activity Calendar — Printable 7-Slide Deck</title>
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
+  <style>
+
+    :root {
+      --bg: #070b10; --panel: #121a22; --ink: #e8f1f4; --muted: #8aa0ad;
+      --line: #24303a; --teal: #00e5d4; --cyan: #7df9ff; --amber: #fbbf24;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0; height: 100%; overflow: hidden;
+      background: var(--bg); color: var(--ink);
+      font-family: "IBM Plex Sans", system-ui, sans-serif;
+    }
+    body {
+      background:
+        radial-gradient(1100px 520px at 8% -8%, rgba(0, 229, 212, 0.11), transparent 55%),
+        radial-gradient(800px 420px at 92% 108%, rgba(20, 145, 155, 0.12), transparent 52%),
+        var(--bg);
+    }
+    .deck { height: 100%; display: grid; grid-template-rows: 1fr 4.5rem; }
+    #slides { overflow: auto; min-height: 0; }
+    .slide {
+      display: none; min-height: 100%;
+      padding: clamp(1.2rem, 3.2vw, 2.8rem);
+      max-width: 1080px; margin: 0 auto; width: 100%;
+      align-content: center; gap: 1rem;
+      animation: in 220ms ease;
+    }
+    .slide.active { display: grid; }
+    @keyframes in {
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: none; }
+    }
+    h1, h2, h3 {
+      font-family: Syne, sans-serif; margin: 0;
+      letter-spacing: -0.02em; line-height: 1.1;
+    }
+    h1 { font-size: clamp(2rem, 5vw, 3.4rem); font-weight: 800; }
+    h2 { font-size: clamp(1.4rem, 3.3vw, 2.35rem); font-weight: 700; }
+    h3 { font-size: 1.05rem; font-weight: 700; color: var(--cyan); }
+    p, li { color: var(--muted); font-size: clamp(0.95rem, 1.35vw, 1.12rem); line-height: 1.55; }
+    .lead { color: var(--ink); font-size: clamp(1.02rem, 1.8vw, 1.26rem); max-width: 44rem; }
+    .kicker {
+      color: var(--teal); text-transform: uppercase;
+      letter-spacing: 0.14em; font-size: 0.76rem; font-weight: 600;
+    }
+    .brand {
+      font-family: Syne, sans-serif; font-weight: 800;
+      font-size: clamp(2.1rem, 5.8vw, 4rem);
+      background: linear-gradient(120deg, var(--ink) 18%, var(--teal) 68%, var(--cyan));
+      -webkit-background-clip: text; background-clip: text; color: transparent;
+    }
+    .pills { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+    .pill {
+      border: 1px solid var(--line); background: rgba(0, 229, 212, 0.06);
+      color: var(--ink); padding: 0.35rem 0.7rem; font-size: 0.82rem;
+      border-radius: 999px; text-decoration: none;
+    }
+    .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.75rem; }
+    @media (max-width: 720px) { .grid { grid-template-columns: 1fr; } }
+    .card { background: var(--panel); border: 1px solid var(--line); padding: 1rem 1.05rem; }
+    .stat-val { font-family: Syne, sans-serif; font-size: 1.65rem; font-weight: 800; color: var(--teal); }
+    .stat-lbl { color: var(--muted); font-size: 0.85rem; margin-top: 0.2rem; }
+    .two { display: grid; grid-template-columns: 1.2fr 0.8fr; gap: 1rem; align-items: start; }
+    @media (max-width: 800px) { .two { grid-template-columns: 1fr; } }
+    ul { margin: 0.4rem 0 0; padding-left: 1.15rem; }
+    .page-tag { color: var(--muted); font-size: 0.78rem; letter-spacing: 0.08em; margin-top: 0.35rem; }
+    .flow { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0.55rem; }
+    @media (max-width: 800px) { .flow { grid-template-columns: 1fr 1fr; } }
+    .flow .card { text-align: center; }
+    .flow .n { font-family: Syne, sans-serif; color: var(--teal); font-weight: 800; font-size: 1.25rem; }
+    a { color: var(--cyan); }
+    .tiny { font-size: 0.82rem; color: var(--muted); }
+    code { color: var(--amber); font-size: 0.9em; }
+
+    .nav {
+      display: flex; flex-wrap: wrap; gap: 0.45rem 0.65rem;
+      justify-content: center; align-items: center;
+      padding: 0.55rem 0.75rem; border-top: 1px solid var(--line);
+      background: rgba(7, 11, 16, 0.96); z-index: 20;
+    }
+    .counter {
+      font-family: Syne, sans-serif; font-weight: 700;
+      color: var(--teal); min-width: 3.8rem; text-align: center;
+    }
+    .nums { display: flex; flex-wrap: wrap; gap: 0.28rem; justify-content: center; }
+    .num-btn {
+      min-width: 2rem; height: 2rem; border: 1px solid var(--line);
+      background: #0a1016; color: var(--ink); font: inherit;
+      font-size: 0.82rem; font-weight: 600; cursor: pointer; border-radius: 4px;
+    }
+    .num-btn.on { background: var(--teal); color: #041016; border-color: var(--teal); }
+    .ctrl {
+      background: var(--teal); border: 0; color: #041016; font-weight: 700;
+      padding: 0.45rem 0.9rem; cursor: pointer; font: inherit; border-radius: 4px;
+    }
+    .ctrl.ghost { background: transparent; border: 1px solid var(--line); color: var(--ink); }
+    .hint-nav { width: 100%; text-align: center; color: var(--muted); font-size: 0.72rem; margin: 0; }
+
+    @media print {
+      html, body { height: auto !important; overflow: visible !important; background: #fff !important; color: #111 !important; }
+      .nav, .no-print { display: none !important; }
+      #slides { overflow: visible !important; }
+      .slide {
+        display: grid !important; page-break-after: always; break-after: page;
+        min-height: 100vh; animation: none; background: #fff;
+      }
+      .slide:last-child { page-break-after: auto; }
+      .brand, h1, h2, h3, .kicker, .lead, p, li, .stat-val, .stat-lbl, .page-tag, a, .pill {
+        color: #111 !important; -webkit-text-fill-color: #111; background: none !important;
+      }
+      .kicker, h3, a { color: #0a6 !important; -webkit-text-fill-color: #0a6; }
+      .card, .pill { border: 1px solid #ccc !important; background: #f7f7f7 !important; }
+    }
+  
+    html, body { height: auto !important; overflow: visible !important; }
+    .deck { height: auto !important; display: block !important; }
+    .nav { display: none !important; }
+    #slides { overflow: visible !important; }
+    .slide {
+      display: grid !important; min-height: 100vh;
+      page-break-after: always; break-after: page; animation: none !important;
+    }
+    .slide:last-child { page-break-after: auto; break-after: auto; }
+    .toolbar {
+      position: sticky; top: 0; z-index: 5;
+      display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: center;
+      padding: 0.75rem 1rem; background: #070b10; border-bottom: 1px solid #24303a;
+    }
+    .toolbar a, .toolbar button {
+      background: #00e5d4; color: #041016; border: 0; font-weight: 700;
+      padding: 0.45rem 0.85rem; text-decoration: none; cursor: pointer; font: inherit;
+    }
+    .toolbar span { color: #8aa0ad; font-size: 0.9rem; }
+    @media print { .toolbar { display: none !important; } }
+  </style>
+</head>
+<body>
+  <div class="toolbar no-print">
+    <span>All 7 slides · Print → Save as PDF, or download deck.pdf</span>
+    <button type="button" onclick="window.print()">Print / Save as PDF</button>
+    <a href="./deck.pdf" download>Download deck.pdf</a>
+    <a href="./">Interactive deck</a>
+  </div>
+  <div class="deck"><main id="slides">
+<section class="slide" data-i="0" id="slide-1">
+        <div class="kicker">NASA Space Apps Challenge 2026 · 1 / 7</div>
+        <div class="brand">Unified Fire Activity Calendar</div>
+        <p class="lead">
+          Harmonize MODIS and VIIRS fire hotspots into one map, activity chart, and FRP view
+          for any window in 2023–2026.
+        </p>
+        <div class="pills">
+          <span class="pill">1 km · ±6 h match</span>
+          <span class="pill">FIRMS Archive</span>
+          <span class="pill">FRP · Compare</span>
+          <a class="pill" href="../app/">Live map →</a>
+          <a class="pill" href="./deck.pdf">PDF</a>
+        </div>
+        <div class="grid" style="margin-top:0.35rem">
+          <div class="card"><div class="stat-val">1 km</div><div class="stat-lbl">Match distance</div></div>
+          <div class="card"><div class="stat-val">±6 h</div><div class="stat-lbl">Time window</div></div>
+          <div class="card"><div class="stat-val">2023–26</div><div class="stat-lbl">Archive span</div></div>
+        </div>
+        <div class="page-tag">1 / 7 · Next → or keys</div>
+      </section><section class="slide" data-i="1" id="slide-2">
+        <div class="kicker">Problem · 2 / 7</div>
+        <h2>Two sensors, one fire — fragmented answers</h2>
+        <div class="two">
+          <div>
+            <p class="lead">MODIS and VIIRS disagree on resolution, confidence, and overpass timing.</p>
+            <ul>
+              <li>Double-counting or missed co-detections</li>
+              <li>Hard to compare seasons (“worse than last year?”)</li>
+              <li>Counts without intensity (FRP) miss the real story</li>
+            </ul>
+          </div>
+          <div class="card">
+            <h3>Users</h3>
+            <p>Fire managers, responders, researchers, and local teams on open NASA FIRMS data.</p>
+          </div>
+        </div>
+        <div class="page-tag">2 / 7</div>
+      </section><section class="slide" data-i="2" id="slide-3">
+        <div class="kicker">Solution · 3 / 7</div>
+        <h2>One calendar: match · chart · map · compare</h2>
+        <div class="grid">
+          <div class="card">
+            <h3>Harmonize</h3>
+            <p>Matched / MODIS-only / VIIRS-only within 1&nbsp;km and ±6&nbsp;hours.</p>
+          </div>
+          <div class="card">
+            <h3>See intensity</h3>
+            <p>Dual-axis chart: hotspot counts + Fire Radiative Power (FRP).</p>
+          </div>
+          <div class="card">
+            <h3>Compare</h3>
+            <p>Any 2023–2026 window vs another period in one click.</p>
+          </div>
+        </div>
+        <p class="lead">Regions (Turkey, Aegean, Mediterranean, California…) or custom coordinates.</p>
+        <div class="page-tag">3 / 7</div>
+      </section><section class="slide" data-i="3" id="slide-4">
+        <div class="kicker">How it works · 4 / 7</div>
+        <h2>From FIRMS detections to a shared story</h2>
+        <div class="flow">
+          <div class="card"><div class="n">1</div><p>Ingest MODIS + VIIRS for bbox &amp; dates</p></div>
+          <div class="card"><div class="n">2</div><p>Match 1&nbsp;km · ±6&nbsp;h</p></div>
+          <div class="card"><div class="n">3</div><p>Daily counts + FRP</p></div>
+          <div class="card"><div class="n">4</div><p>FRP-scaled point map</p></div>
+        </div>
+        <div class="card">
+          <h3>Shippable data</h3>
+          <p>Compact regional extracts keep the public demo fast without multi-GB worldwide dumps.</p>
+        </div>
+        <div class="page-tag">4 / 7</div>
+      </section><section class="slide" data-i="4" id="slide-5">
+        <div class="kicker">Demo · 5 / 7</div>
+        <h2>What judges will click</h2>
+        <div class="grid">
+          <div class="card">
+            <h3>Controls</h3>
+            <p>Year chips, date range, region presets, custom W/S/E/N, period compare.</p>
+          </div>
+          <div class="card">
+            <h3>Chart panel</h3>
+            <p>Toggle Matched / MODIS / VIIRS / FRP; smoothing; linear or log FRP.</p>
+          </div>
+          <div class="card">
+            <h3>Map</h3>
+            <p>Small FRP-scaled dots; click a point for sensor + FRP.</p>
+          </div>
+        </div>
+        <p class="tiny">Path: Turkey → Summer → watch chart + map update together.</p>
+        <div class="page-tag">5 / 7</div>
+      </section><section class="slide" data-i="5" id="slide-6">
+        <div class="kicker">Impact · 6 / 7</div>
+        <h2>Faster, clearer fire decisions</h2>
+        <div class="two">
+          <ul>
+            <li>Season vs last year in seconds</li>
+            <li>Separate sensor bias from true activity growth</li>
+            <li>Intensity (FRP), not only detection counts</li>
+            <li>One public HTTPS link for the whole team</li>
+          </ul>
+          <div class="card">
+            <h3>Space Apps fit</h3>
+            <p>Open NASA Earth data → actionable fire calendar for communities at risk.</p>
+          </div>
+        </div>
+        <div class="page-tag">6 / 7</div>
+      </section><section class="slide" data-i="6" id="slide-7">
+        <div class="kicker">Close · 7 / 7</div>
+        <h1>Ready for a live walkthrough</h1>
+        <p class="lead">Open the app → Turkey → year chip → see points and FRP move together.</p>
+        <div class="two">
+          <div class="card">
+            <h3>Links</h3>
+            <ul>
+              <li>Live map: <a href="../app/">…/app/</a></li>
+              <li>This deck PDF: <a href="./deck.pdf">pitch7/deck.pdf</a></li>
+              <li>Source: <code>github.com/egemen01yasin33-maker/modis-viirs-fire-calendar</code></li>
+              <li>Nav: ← → · Space · 1–7 · F fullscreen</li>
+            </ul>
+          </div>
+          <div class="card">
+            <h3>Unified Fire Activity Calendar</h3>
+            <p>NASA Space Apps 2026 · MODIS &amp; VIIRS hotspot harmonization</p>
+            <p class="tiny">Data: NASA FIRMS Archive</p>
+          </div>
+        </div>
+        <div class="pills">
+          <span class="pill">Thank you</span>
+          <a class="pill" href="../app/">Launch app</a>
+          <a class="pill" href="./deck.pdf">Download PDF</a>
+        </div>
+        <div class="page-tag">7 / 7</div>
+      </section>
+  </main></div>
+</body>
+</html>
